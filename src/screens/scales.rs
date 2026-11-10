@@ -95,6 +95,19 @@ impl Default for Scales {
 }
 
 impl Scales {
+    /// Show a scale in the library (used by links from other screens).
+    pub fn open(&mut self, root: Note, id: &str) {
+        if let Some(ty) = ScaleType::by_id(id) {
+            self.root = root;
+            self.ty = ty;
+            self.view = View::Pattern(0);
+            self.tab = Tab::Library;
+            self.q_ready = false;
+            self.play_list.clear();
+            self.play_id = None;
+        }
+    }
+
     pub fn set_tab(&mut self, t: Tab) {
         self.tab = t;
         self.q_ready = false;

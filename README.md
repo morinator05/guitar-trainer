@@ -17,6 +17,8 @@ with a focus on blues and metal. Runs fully offline, uses about 40 MB of RAM for
 - *Build it*: chord tones around a root on string 6/5/4/3, with "N strings up, M frets higher" directions.
 - Drills: *sight-read* (symbol or notation → play it in a fret zone; click it or self-check on the guitar),
   *name this chord* (from a diagram or notation).
+- *Identify*: click any notes (max. one per string) and get the chord name, other names for the same
+  notes, inversion, the notes written out, intervals from the bass and the scales that fit.
 
 **Scales**
 - Blues/rock (pentatonics, blues, mixolydian, dorian, major) and metal (natural/harmonic minor,
@@ -68,5 +70,5 @@ cargo vendor --versioned-dirs vendor
 - `src/theory/` is pure logic (notes, intervals, tunings, chords, voicing generator, scales, positions),
   unit-tested with `cargo test`.
 - `GT_START=<screen>` opens a screen directly, e.g. `GT_START=chords:read cargo run`
-  (`fb`, `fb:name`, `fb:find`, `fb:staff`, `chords`, `chords:build`, `chords:read`, `chords:name`,
+  (`fb`, `fb:name`, `fb:find`, `fb:staff`, `chords`, `chords:build`, `chords:read`, `chords:name`, `chords:identify`,
   `scales`, `scales:fill`, `scales:degree`, `scales:play`, `progress`, `settings`).

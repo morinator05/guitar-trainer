@@ -15,6 +15,7 @@ use egui::{Color32, Key, RichText, Ui};
 
 pub enum Nav {
     Chord { root: Note, ty: &'static str },
+    Scale { root: Note, id: &'static str },
 }
 
 /// The settings a drill question depends on. If they change (e.g. the user picks

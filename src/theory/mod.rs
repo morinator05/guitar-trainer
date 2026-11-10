@@ -1,6 +1,7 @@
 pub mod chord;
 pub mod chord_db;
 pub mod fretboard;
+pub mod identify;
 pub mod interval;
 pub mod note;
 pub mod scale;

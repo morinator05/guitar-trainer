@@ -23,6 +23,7 @@ pub enum Tab {
     BuildIt,
     SightRead,
     NameIt,
+    Identify,
 }
 
 const REGIONS: [(&str, Option<(u8, u8)>); 6] = [
@@ -94,6 +95,7 @@ pub struct Chords {
     marks: Marks,
     wrong_type: Option<usize>,
     stamp: Option<Stamp>,
+    identify: super::identify::Identify,
 }
 
 impl Default for Chords {
@@ -126,6 +128,7 @@ impl Default for Chords {
             marks: Marks::default(),
             wrong_type: None,
             stamp: None,
+            identify: Default::default(),
         }
     }
 }
@@ -172,6 +175,7 @@ impl Chords {
                 (Tab::BuildIt, "🔨 Build it"),
                 (Tab::SightRead, "👁 Sight-read drill"),
                 (Tab::NameIt, "❓ Name this chord"),
+                (Tab::Identify, "🔎 Identify"),
             ],
         ) {
             self.set_tab(tab);
@@ -187,6 +191,7 @@ impl Chords {
             Tab::BuildIt => self.build_it(ui, ctx),
             Tab::SightRead => self.sight_read(ui, ctx),
             Tab::NameIt => self.name_it(ui, ctx),
+            Tab::Identify => self.identify.ui(ui, ctx),
         }
     }
 

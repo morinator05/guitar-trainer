@@ -98,6 +98,10 @@ impl App {
             }
             "chords:read" => self.go_to_drill(Drill::ChRead),
             "chords:name" => self.go_to_drill(Drill::ChName),
+            "chords:identify" => {
+                self.screen = Screen::Chords;
+                self.chords.set_tab(chords::Tab::Identify);
+            }
             "scales" | "scales:library" => self.screen = Screen::Scales,
             "scales:fill" => self.go_to_drill(Drill::ScFill),
             "scales:degree" => self.go_to_drill(Drill::ScDegree),
@@ -281,9 +285,16 @@ impl eframe::App for App {
             }
         });
 
-        if let Some(Nav::Chord { root, ty }) = self.nav.take() {
-            self.chords.open(root, ty);
-            self.screen = Screen::Chords;
+        match self.nav.take() {
+            Some(Nav::Chord { root, ty }) => {
+                self.chords.open(root, ty);
+                self.screen = Screen::Chords;
+            }
+            Some(Nav::Scale { root, id }) => {
+                self.scales.open(root, id);
+                self.screen = Screen::Scales;
+            }
+            None => {}
         }
 
         // Save answers within ~2 s (and settings every 10 s) so a crash or kill loses nothing.
