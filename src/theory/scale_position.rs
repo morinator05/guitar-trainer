@@ -73,9 +73,12 @@ pub fn nps_pattern(t: &Tuning, scale: &Scale, start_degree: usize, nps: usize, m
     } else {
         0
     };
+    // Notes that don't fit on the neck (above max_fret) are left out.
     let mut v: Vec<Pos> = frets
         .into_iter()
-        .map(|(s, f)| Pos::new(s, (f + shift).clamp(0, 30) as u8))
+        .map(|(s, f)| (s, f + shift))
+        .filter(|&(_, f)| (0..=max_fret as i32).contains(&f))
+        .map(|(s, f)| Pos::new(s, f as u8))
         .collect();
     sort_by_pitch(t, &mut v);
     v
@@ -112,6 +115,8 @@ pub fn positions(t: &Tuning, scale: &Scale, max_fret: u8) -> Vec<ScalePosition> 
             name: format!("{label} {}", d + 1),
             notes: nps_pattern(t, scale, d, nps, max_fret),
         })
+        // a pattern that mostly falls off the end of a short neck is not useful
+        .filter(|p| p.notes.len() * 2 >= 6 * nps)
         .collect()
 }
 
@@ -186,6 +191,22 @@ mod tests {
             per_string(&pos[0]),
             [vec![0, 2, 3], vec![0, 2, 3], vec![0, 2, 4], vec![0, 2, 4], vec![1, 3, 5], vec![2, 3, 5]]
         );
+    }
+
+    #[test]
+    fn patterns_respect_max_fret() {
+        for t in ALL_TUNINGS {
+            for ty in SCALE_TYPES {
+                for pc in 0..12u8 {
+                    let s = Scale::new(Note::from_pc(pc), ty);
+                    let pos = positions(t, &s, 12);
+                    assert!(!pos.is_empty(), "{} {pc} has no position within 12 frets", ty.name);
+                    for p in &pos {
+                        assert!(p.notes.iter().all(|n| n.fret <= 12), "{} {pc} {}", ty.name, p.name);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

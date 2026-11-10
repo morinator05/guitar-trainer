@@ -396,6 +396,7 @@ fn evaluate(
     let (fingers, barre) = finger_plan(frets)?;
     let finger_count = {
         let mut f: Vec<u8> = fingers.iter().copied().filter(|&x| x > 0).collect();
+        f.sort_unstable();
         f.dedup();
         f.len()
     };
@@ -558,6 +559,15 @@ mod tests {
         assert!(from_frets(parse_frets("1x3x5x").unwrap(), Source::Generated).is_some());
         // five separate fingers: impossible
         assert!(from_frets(parse_frets("x12345").unwrap(), Source::Generated).is_none());
+    }
+
+    #[test]
+    fn barre_finger_count_scores() {
+        // F barre (133211) uses 4 fingers; its score must not count the barre finger 3 times
+        let f = generate(&E_STANDARD, &chord("F", "maj"), GenOptions::default());
+        let v = f.iter().find(|v| v.tab_string() == "133211").unwrap();
+        // score = fingers*0.8 + span*0.6 + barre 0.4 + min_fret*0.04 → < 5 with 4 fingers
+        assert!(v.score < 5.0, "score {}", v.score);
     }
 
     #[test]

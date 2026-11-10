@@ -107,7 +107,7 @@ impl Interval {
 /// minor third looks the same everywhere in the app.
 pub fn interval_color(semis_from_root: Pc) -> [u8; 3] {
     match semis_from_root % 12 {
-        0 => [220, 50, 47],    // root: red
+        0 => [224, 69, 63],    // root: signal red (never used as UI accent)
         1 => [108, 113, 196],  // b2/b9: violet
         2 => [42, 161, 152],   // 2/9: teal
         3 => [38, 139, 210],   // b3: blue
@@ -115,7 +115,7 @@ pub fn interval_color(semis_from_root: Pc) -> [u8; 3] {
         5 => [133, 153, 0],    // 4/11: olive
         6 => [211, 54, 130],   // b5/#4: magenta (blue note)
         7 => [240, 160, 30],   // 5: orange
-        8 => [160, 120, 60],   // b6/#5: brown
+        8 => [210, 168, 110],  // b6/#5: sand (visible on rosewood)
         9 => [100, 180, 100],  // 6/13: green
         10 => [181, 137, 0],   // b7: yellow
         _ => [200, 200, 80],   // 7: light yellow

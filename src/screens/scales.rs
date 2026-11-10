@@ -11,7 +11,7 @@ use crate::theory::scale::{SCALE_TYPES, Scale, ScaleCategory, ScaleType};
 use crate::theory::scale_position::{ScalePosition, full_neck, positions, window};
 use crate::widgets::fretboard::{Dot, rgb};
 use crate::widgets::notation::{Column, NotationView};
-use crate::widgets::{choice_buttons, heading, hint};
+use crate::widgets::{choice_buttons, heading, hint, tab_bar};
 use egui::{Color32, RichText, ScrollArea, Ui};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -39,6 +39,8 @@ pub struct Scales {
     metronome: bool,
     play_list: Vec<Pos>,
     play_step: f32,
+    play_id: Option<u64>,
+    stamp: Option<Stamp>,
     random_key: bool,
     show_roots: bool,
     // drill state
@@ -70,6 +72,8 @@ impl Default for Scales {
             metronome: false,
             play_list: Vec::new(),
             play_step: 0.25,
+            play_id: None,
+            stamp: None,
             random_key: false,
             show_roots: true,
             q_ready: false,
@@ -96,20 +100,48 @@ impl Scales {
         self.q_ready = false;
     }
 
+    /// Between questions (nothing half-answered on screen)?
+    pub fn is_idle(&self) -> bool {
+        self.advance_at.is_none() && !self.revealed
+    }
+
+    /// Forget the playback highlight when the sequence ended or was replaced.
+    fn update_playback(&mut self, ctx: &Ctx) {
+        if let Some(id) = self.play_id {
+            let ended = ctx
+                .audio
+                .seq_elapsed(id)
+                .is_some_and(|e| (e / self.play_step) as usize >= self.play_list.len());
+            if !ctx.audio.is_current(id) || ended {
+                self.play_id = None;
+                self.play_list.clear();
+            }
+        }
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
-        ui.horizontal(|ui| {
-            for (t, label) in [
+        let mut tab = self.tab;
+        if tab_bar(
+            ui,
+            &mut tab,
+            &[
                 (Tab::Library, "📚 Library"),
                 (Tab::FillBox, "📝 Fill the box"),
                 (Tab::WhichDegree, "❓ Which degree?"),
                 (Tab::PlayPosition, "🎸 Play the position"),
-            ] {
-                if ui.selectable_label(self.tab == t, RichText::new(label).size(17.0)).clicked() {
-                    self.set_tab(t);
-                }
-            }
-        });
-        ui.separator();
+            ],
+        ) {
+            self.set_tab(tab);
+        }
+        // tuning or fret count changed → regenerate the drill question
+        if self.stamp.is_some() && self.stamp != Some(ctx.stamp()) {
+            self.q_ready = false;
+            self.q_note = None;
+            self.stamp = None;
+            self.play_list.clear();
+            self.play_id = None;
+        }
+        self.update_playback(ctx);
         if self.scale_picker(ui, ctx) {
             self.q_ready = false;
         }
@@ -200,8 +232,8 @@ impl Scales {
     }
 
     fn playing_index(&self, ctx: &Ctx) -> Option<usize> {
-        let start = ctx.audio.seq_start?;
-        let i = (start.elapsed().as_secs_f32() / self.play_step) as usize;
+        let e = ctx.audio.seq_elapsed(self.play_id?)?;
+        let i = (e / self.play_step) as usize;
         (i < self.play_list.len()).then_some(i)
     }
 
@@ -212,14 +244,18 @@ impl Scales {
                 let t = ctx.tuning();
                 let midis: Vec<i32> = self.play_list.iter().map(|p| midi_at(t, *p)).collect();
                 self.play_step = 60.0 / ctx.settings.bpm / 2.0;
-                ctx.audio.sequence(&midis, ctx.settings.bpm, 2.0);
+                self.play_id = Some(ctx.audio.sequence(&midis, ctx.settings.bpm, 2.0));
             }
             if ui.button("■ stop").clicked() {
                 ctx.audio.stop();
                 self.play_list.clear();
+                self.play_id = None;
             }
-            ui.add(egui::Slider::new(&mut ctx.settings.bpm, 40.0..=220.0).text("BPM (8th notes)"));
-            if ui.checkbox(&mut self.metronome, "metronome").changed() {
+            let bpm_changed = ui
+                .add(egui::Slider::new(&mut ctx.settings.bpm, 40.0..=220.0).text("BPM (8th notes)"))
+                .changed();
+            let toggled = ui.checkbox(&mut self.metronome, "metronome").changed();
+            if toggled || (bpm_changed && self.metronome) {
                 ctx.audio.metronome(self.metronome.then_some(ctx.settings.bpm), 4);
             }
         });
@@ -229,9 +265,10 @@ impl Scales {
     fn library(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
         let s = self.scale();
         let t = ctx.tuning();
-        let pats = positions(t, &s, ctx.settings.frets.max(15));
+        let pats = positions(t, &s, ctx.settings.frets);
         ScrollArea::vertical().id_salt("scale_lib").show(ui, |ui| {
             self.header(ui, ctx, &s);
+            let before = (self.view, self.window_start);
             ui.horizontal_wrapped(|ui| {
                 ui.label("Show:");
                 ui.selectable_value(&mut self.view, View::Full, "whole neck");
@@ -243,6 +280,12 @@ impl Scales {
                     ui.add(egui::Slider::new(&mut self.window_start, 0..=ctx.settings.frets.saturating_sub(4)).text("start fret"));
                 }
             });
+            if before != (self.view, self.window_start) && self.play_id.is_some() {
+                // a different position is shown: stop the old playback and its tab
+                ctx.audio.stop();
+                self.play_id = None;
+                self.play_list.clear();
+            }
             let shown: ScalePosition = match self.view {
                 View::Full => ScalePosition {
                     name: "whole neck".into(),
@@ -257,7 +300,7 @@ impl Scales {
             if self.view != View::Full {
                 for p in full_neck(t, &s, ctx.settings.frets) {
                     if !shown.notes.contains(&p) {
-                        dots.push(Dot::new(p, "", Color32::from_gray(110)).hollow());
+                        dots.push(Dot::new(p, "", Color32::from_white_alpha(60)).hollow());
                     }
                 }
             }
@@ -269,7 +312,6 @@ impl Scales {
                 dots.push(d);
             }
             let mut board = ctx.board(&dots);
-            board.height = 230.0;
             board.clickable = true;
             if self.view != View::Full {
                 board.zone = Some(shown.fret_range());
@@ -327,7 +369,7 @@ impl Scales {
             self.root = *ctx.rng.pick(&roots).unwrap();
         }
         let s = self.scale();
-        let pats = positions(ctx.tuning(), &s, ctx.settings.frets.max(15));
+        let pats = positions(ctx.tuning(), &s, ctx.settings.frets);
         let keys: Vec<String> = (0..pats.len())
             .map(|i| format!("{prefix}:{}:{}:{}", s.ty.id, s.root.pc(), i))
             .collect();
@@ -344,6 +386,7 @@ impl Scales {
         self.right_choice = None;
         self.started = ctx.time;
         self.q_ready = true;
+        self.stamp = Some(ctx.stamp());
     }
 
     fn drill_options(&mut self, ui: &mut Ui) {
@@ -418,6 +461,12 @@ impl Scales {
                     });
                     self.advance_at = Some(ctx.time + 1.5);
                 }
+            } else if s.contains(pc_at(t, p)) && !self.q_pos.notes.contains(&p) {
+                // a real scale note, just outside this position: no penalty
+                self.feedback = Some(Feedback {
+                    text: format!("{} is in the scale, but outside this position", ctx.pc_name(pc_at(t, p))),
+                    ok: true,
+                });
             } else if !self.q_pos.notes.contains(&p) {
                 self.wrong_once = true;
                 self.wrong_clicks.push((p, ctx.time));
@@ -457,7 +506,10 @@ impl Scales {
                 .collect();
             let keys: Vec<String> = notes
                 .iter()
-                .map(|p| format!("sc:deg:{}:{}", s.ty.id, s.interval_of(pc_at(t, *p)).unwrap().formula_name()))
+                .map(|p| {
+                    let d = s.interval_of(pc_at(t, *p)).map(|i| i.formula_name()).unwrap_or_default();
+                    format!("sc:deg:{}:{}", s.ty.id, d)
+                })
                 .collect();
             let mut i = ctx.progress.pick(ctx.rng, &keys);
             if Some(notes[i]) == this.q_note && notes.len() > 1 {
@@ -484,7 +536,12 @@ impl Scales {
         let t = ctx.tuning();
         let q = self.q_note.unwrap();
         let pc = pc_at(t, q);
-        let interval = s.interval_of(pc).unwrap();
+        let Some(interval) = s.interval_of(pc) else {
+            // stale question (should not happen thanks to the stamp check): start over
+            self.q_ready = false;
+            self.q_note = None;
+            return;
+        };
         let key = format!("sc:deg:{}:{}", s.ty.id, interval.formula_name());
         prompt(ui, &format!("{} {}: which scale degree is the ringed note?", ctx.name(s.root), s.ty.name));
         hint(ui, "Find the nearest root (red) and think in intervals: that's how you target chord tones while improvising.");
@@ -492,7 +549,7 @@ impl Scales {
         for p in &self.q_pos.notes {
             let is_root = pc_at(t, *p) == s.root.pc();
             if *p == q {
-                let mut d = if self.advance_at.is_some() { self.dot(ctx, &s, *p) } else { Dot::new(*p, "?", BLUE) };
+                let mut d = if self.advance_at.is_some() { self.dot(ctx, &s, *p) } else { Dot::question(*p) };
                 d = d.emphasis();
                 dots.push(d);
             } else if self.show_roots && is_root {

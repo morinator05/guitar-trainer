@@ -129,3 +129,20 @@ DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 ```
+
+## Fonts bundled by egui (epaint_default_fonts)
+
+Embedded via the egui crate; all free to use and redistribute:
+
+- **Ubuntu Light** – Ubuntu Font Licence 1.0
+- **Hack** – MIT (Source Foundry Authors; Bitstream Vera / DejaVu derived, public domain parts)
+- **Noto Emoji** (monochrome) – SIL Open Font License 1.1
+- **emoji-icon-font** – MIT (John Slegers)
+
+Full texts ship with the `epaint_default_fonts` crate (`fonts/*.txt`).
+
+## Graphics
+
+The fretboard (wood grain, frets, strings, nut, inlays) is drawn procedurally by
+this program's own code (`src/widgets/wood.rs`, `src/widgets/fretboard.rs`).
+No third-party images or textures are used.

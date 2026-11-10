@@ -21,6 +21,29 @@ impl LabelMode {
     }
 }
 
+/// How the fretboard is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum FretStyle {
+    /// Dark rosewood with pearl dots and nickel frets.
+    #[default]
+    Rosewood,
+    /// Bright maple (Strat-style) with black dots and nickel frets.
+    Maple,
+    /// The original flat, schematic look.
+    Classic,
+}
+
+impl FretStyle {
+    pub const ALL: [FretStyle; 3] = [FretStyle::Rosewood, FretStyle::Maple, FretStyle::Classic];
+    pub fn label(self) -> &'static str {
+        match self {
+            FretStyle::Rosewood => "Rosewood",
+            FretStyle::Maple => "Maple (Strat)",
+            FretStyle::Classic => "Classic (flat)",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -32,7 +55,7 @@ pub struct Settings {
     pub sound: bool,
     pub volume: f32,
     pub ui_scale: f32,
-    pub dark: bool,
+    pub fretboard_style: FretStyle,
     pub bpm: f32,
 }
 
@@ -47,7 +70,7 @@ impl Default for Settings {
             sound: true,
             volume: 0.7,
             ui_scale: 1.2,
-            dark: true,
+            fretboard_style: FretStyle::Rosewood,
             bpm: 80.0,
         }
     }

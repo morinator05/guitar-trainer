@@ -52,10 +52,16 @@ impl Progress {
     pub fn record(&mut self, key: &str, correct: bool, ms: Option<f32>) {
         let now = unix_now();
         let it = self.items.entry(key.to_string()).or_default();
+        it.level = it.level.min(BOXES - 1); // guard against corrupt files
+        let was_due = it.due <= now;
         it.attempts += 1;
         if correct {
             it.correct += 1;
-            it.level = (it.level + 1).min(BOXES - 1);
+            // Only a correct answer at (or after) the due date moves the item up a box;
+            // answering it again and again in one sitting does not.
+            if was_due {
+                it.level = (it.level + 1).min(BOXES - 1);
+            }
         } else {
             it.level = 0;
         }
@@ -91,7 +97,7 @@ impl Progress {
         match self.items.get(key) {
             None => 1.5,
             Some(it) => {
-                let lvl = (BOXES - it.level) as f32; // 1..5
+                let lvl = (BOXES - it.level.min(BOXES - 1)) as f32; // 1..5
                 let mut w = lvl * lvl / 5.0;
                 if it.due <= unix_now() {
                     w *= 2.0;
@@ -172,13 +178,27 @@ mod tests {
     fn leitner() {
         let mut p = Progress::default();
         p.record("a", true, Some(1000.0));
+        assert_eq!(p.get("a").unwrap().level, 1);
+        // not due again until tomorrow: a second correct answer does not promote
+        p.record("a", true, None);
+        assert_eq!(p.get("a").unwrap().level, 1);
+        p.items.get_mut("a").unwrap().due = 0; // pretend it is due
         p.record("a", true, None);
         assert_eq!(p.get("a").unwrap().level, 2);
         p.record("a", false, None);
         assert_eq!(p.get("a").unwrap().level, 0);
-        assert_eq!(p.get("a").unwrap().attempts, 3);
+        assert_eq!(p.get("a").unwrap().attempts, 4);
         assert!(p.weight("a") > p.weight("missing") * 0.5);
-        assert_eq!(p.today().attempts, 3);
+        assert_eq!(p.today().attempts, 4);
         assert_eq!(p.streak(), 1);
+    }
+
+    #[test]
+    fn corrupt_level_is_clamped() {
+        let mut p = Progress::default();
+        p.items.insert("x".into(), ItemStats { level: 200, ..Default::default() });
+        let _ = p.weight("x");
+        p.record("x", true, None);
+        assert!(p.get("x").unwrap().level < BOXES);
     }
 }

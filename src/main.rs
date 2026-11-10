@@ -6,6 +6,7 @@ mod screens;
 mod settings;
 mod srs;
 mod storage;
+mod theme;
 mod theory;
 mod util;
 mod widgets;

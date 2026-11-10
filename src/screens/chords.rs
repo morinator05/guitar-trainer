@@ -13,7 +13,7 @@ use crate::theory::voicing::{self, GenOptions, Source, Voicing};
 use crate::widgets::chord_diagram::ChordDiagram;
 use crate::widgets::fretboard::{Dot, rgb};
 use crate::widgets::notation::{Column, NotationView};
-use crate::widgets::{Marks, choice_buttons, heading, hint, note_picker};
+use crate::widgets::{Marks, choice_buttons, heading, hint, note_picker, primary_button, tab_bar};
 use egui::{Color32, RichText, ScrollArea, Ui};
 use std::collections::HashMap;
 
@@ -93,6 +93,7 @@ pub struct Chords {
     advance_at: Option<f64>,
     marks: Marks,
     wrong_type: Option<usize>,
+    stamp: Option<Stamp>,
 }
 
 impl Default for Chords {
@@ -124,6 +125,7 @@ impl Default for Chords {
             advance_at: None,
             marks: Marks::default(),
             wrong_type: None,
+            stamp: None,
         }
     }
 }
@@ -161,25 +163,36 @@ impl Chords {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
-        ui.horizontal(|ui| {
-            for (t, label) in [
+        let mut tab = self.tab;
+        if tab_bar(
+            ui,
+            &mut tab,
+            &[
                 (Tab::Library, "📚 Library"),
                 (Tab::BuildIt, "🔨 Build it"),
                 (Tab::SightRead, "👁 Sight-read drill"),
                 (Tab::NameIt, "❓ Name this chord"),
-            ] {
-                if ui.selectable_label(self.tab == t, RichText::new(label).size(17.0)).clicked() {
-                    self.set_tab(t);
-                }
-            }
-        });
-        ui.separator();
+            ],
+        ) {
+            self.set_tab(tab);
+        }
+        // tuning or fret count changed → the current question is stale
+        if self.stamp.is_some() && self.stamp != Some(ctx.stamp()) {
+            self.read_q = None;
+            self.name_q = None;
+            self.stamp = None;
+        }
         match self.tab {
             Tab::Library => self.library(ui, ctx),
             Tab::BuildIt => self.build_it(ui, ctx),
             Tab::SightRead => self.sight_read(ui, ctx),
             Tab::NameIt => self.name_it(ui, ctx),
         }
+    }
+
+    /// Between questions (nothing half-answered on screen)?
+    pub fn is_idle(&self) -> bool {
+        !self.solved && !self.revealed && self.advance_at.is_none()
     }
 
     fn chord_picker(&mut self, ui: &mut Ui, ctx: &Ctx) {
@@ -368,24 +381,56 @@ impl Chords {
                 })
                 .collect();
             let mut board = ctx.board(&dots);
-            board.zone = Some((sel.min_fret().saturating_sub(0).max(if sel.has_open() { 0 } else { 1 }), sel.max_fret().max(1)));
-            board.height = 200.0;
+            board.zone = Some((if sel.has_open() { 0 } else { sel.min_fret() }, sel.max_fret().max(1)));
+            board.height = Some(220.0);
             board.show(ui);
 
-            ui.horizontal(|ui| {
+            // voicing strip (left) + notation of the selection (right column)
+            ui.add_space(6.0);
+            let label_fingers = self.label_fingers;
+            let mut clicked = None;
+            let strip_w = (ui.available_width() - 330.0).max(360.0);
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(egui::vec2(strip_w, 4000.0), egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                    heading(ui, &format!("Voicings ({} hand-made ★, {} generated)", db.len(), generated.len()));
+                    hint(ui, "Click a diagram to select and hear it. ★ = hand-made shape from the chord database.");
+                    ui.horizontal_wrapped(|ui| {
+                        for (i, v) in list.iter().enumerate() {
+                            let (labels, colors) = self.diagram_labels(ctx, &chord, v, label_fingers);
+                            let d = ChordDiagram {
+                                voicing: v,
+                                labels,
+                                colors,
+                                width: 112.0,
+                                title: Some(if v.source == Source::Database { "★".into() } else { String::new() }),
+                                selected: i == self.selected,
+                                subtitle: Some(v.tab_string()),
+                            };
+                            if d.show(ui).clicked() {
+                                clicked = Some(i);
+                            }
+                        }
+                    });
+                    if generated.len() > 18 {
+                        let label = if self.more { "show fewer" } else { "show all generated voicings" };
+                        if ui.button(label).clicked() {
+                            self.more = !self.more;
+                        }
+                    }
+                });
+                ui.separator();
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Notes of this voicing:").strong());
+                    ui.label(RichText::new("This voicing, written out:").strong());
                     let cols = [Column {
                         pitches: Self::voicing_pitches(t, &chord, &sel),
                         tab: sel.played().collect(),
                         label: String::new(),
                     }];
                     let mut nv = NotationView::new(&cols);
-                    nv.staff_space = 8.0;
-                    ui.allocate_ui(egui::vec2(170.0, 250.0), |ui| nv.show(ui));
-                });
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Chord tones in close position:").strong());
+                    nv.staff_space = 9.0;
+                    ui.allocate_ui(egui::vec2(200.0, 260.0), |ui| nv.show(ui));
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("Chord tones, close position:").strong());
                     let cols = [Column {
                         pitches: Self::close_position(&chord),
                         tab: Vec::new(),
@@ -393,42 +438,13 @@ impl Chords {
                     }];
                     let mut nv = NotationView::new(&cols);
                     nv.tab = false;
-                    nv.staff_space = 8.0;
-                    ui.allocate_ui(egui::vec2(170.0, 130.0), |ui| nv.show(ui));
+                    nv.staff_space = 9.0;
+                    ui.allocate_ui(egui::vec2(200.0, 140.0), |ui| nv.show(ui));
                 });
-            });
-
-            ui.add_space(6.0);
-            heading(ui, &format!("Voicings ({} hand-made ★, {} generated)", db.len(), generated.len()));
-            hint(ui, "Click a diagram to select it. ★ = from the chord database (E-standard shapes, reused for D standard and – if the low string is not used – for drop tunings).");
-            let label_fingers = self.label_fingers;
-            let mut clicked = None;
-            ui.horizontal_wrapped(|ui| {
-                for (i, v) in list.iter().enumerate() {
-                    let (labels, colors) = self.diagram_labels(ctx, &chord, v, label_fingers);
-                    let d = ChordDiagram {
-                        voicing: v,
-                        labels,
-                        colors,
-                        width: 112.0,
-                        title: Some(if v.source == Source::Database { "★".into() } else { String::new() }),
-                        selected: i == self.selected,
-                        subtitle: Some(v.tab_string()),
-                    };
-                    if d.show(ui).clicked() {
-                        clicked = Some(i);
-                    }
-                }
             });
             if let Some(i) = clicked {
                 self.selected = i;
                 ctx.play_chord(&list[i].midi_notes(t));
-            }
-            if generated.len() > 18 {
-                let label = if self.more { "show fewer" } else { "show all generated voicings" };
-                if ui.button(label).clicked() {
-                    self.more = !self.more;
-                }
             }
         });
     }
@@ -561,6 +577,7 @@ impl Chords {
     }
 
     fn reset_q(&mut self, ctx: &Ctx) {
+        self.stamp = Some(ctx.stamp());
         self.clicked = [None; 6];
         self.started = ctx.time;
         self.wrong_once = false;
@@ -591,9 +608,13 @@ impl Chords {
                     PromptKind::Mixed => ctx.rng.below(2) == 0,
                 };
                 self.read_q = Some(ReadQ { chord: c, staff, zone });
-                break;
+                self.reset_q(ctx);
+                return;
             }
         }
+        // nothing fitting found (very unlikely): a safe default question
+        let am = Chord::new(Note::parse("A").unwrap(), ChordType::by_id("min").unwrap());
+        self.read_q = Some(ReadQ { chord: am, staff: false, zone: (0, 4) });
         self.reset_q(ctx);
     }
 
@@ -644,7 +665,7 @@ impl Chords {
                 if show_answers {
                     dots.push(ctx.interval_dot(p, chord.root, chord.interval_of(pc), chord.spell(pc)));
                 } else {
-                    dots.push(Dot::new(p, "", BLUE));
+                    dots.push(Dot::new(p, "", MARKER));
                 }
             }
         }
@@ -679,8 +700,7 @@ impl Chords {
             if !show_answers {
                 hint(ui, "Click one note per string (click again to remove). Strings you don't click are muted.");
                 ui.horizontal(|ui| {
-                    let check = ui.button(RichText::new("✔ Check (Enter)").size(17.0)).clicked()
-                        || ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let check = primary_button(ui, "✔ Check (Enter)").clicked() || key_once(ui, egui::Key::Enter);
                     if ui.button("Clear").clicked() {
                         self.clicked = [None; 6];
                     }

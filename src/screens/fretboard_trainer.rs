@@ -7,7 +7,7 @@ use crate::theory::note::{Letter, Note, Pc, Pitch, is_natural};
 use crate::theory::tuning::{Tuning, TuningId};
 use crate::widgets::fretboard::Dot;
 use crate::widgets::notation::{Column, NotationView};
-use crate::widgets::{Marks, heading, hint, note_picker};
+use crate::widgets::{Marks, heading, hint, note_picker, tab_bar};
 use egui::{Color32, RichText, Ui};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -87,6 +87,8 @@ pub struct FretboardTrainer {
     wrong_clicks: Vec<(Pos, f64)>,
     // staff
     q_pitch: Option<Pitch>,
+    /// settings the current question was made for
+    stamp: Option<Stamp>,
 }
 
 impl Default for FretboardTrainer {
@@ -115,6 +117,7 @@ impl Default for FretboardTrainer {
             found: Vec::new(),
             wrong_clicks: Vec::new(),
             q_pitch: None,
+            stamp: None,
         }
     }
 }
@@ -127,11 +130,17 @@ impl FretboardTrainer {
         self.targets.clear();
     }
 
+    /// Between questions (nothing half-answered on screen)?
+    pub fn is_idle(&self) -> bool {
+        self.advance_at.is_none() && !self.revealed
+    }
+
     fn max_fret(&self, ctx: &Ctx) -> u8 {
         LEVELS[self.level].max_fret.unwrap_or(ctx.settings.frets).min(ctx.settings.frets)
     }
 
     fn reset_question(&mut self, ctx: &Ctx) {
+        self.stamp = Some(ctx.stamp());
         self.started = ctx.time;
         self.wrong_once = false;
         self.feedback = None;
@@ -143,19 +152,26 @@ impl FretboardTrainer {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
-        ui.horizontal(|ui| {
-            for (m, label) in [
+        let mut m = self.mode;
+        if tab_bar(
+            ui,
+            &mut m,
+            &[
                 (Mode::Explore, "🔍 Explore"),
                 (Mode::NameNote, "❓ Name the note"),
                 (Mode::FindNote, "🎯 Find the note"),
                 (Mode::StaffToFret, "🎼 Staff → fret"),
-            ] {
-                if ui.selectable_label(self.mode == m, RichText::new(label).size(17.0)).clicked() {
-                    self.set_mode(m);
-                }
-            }
-        });
-        ui.separator();
+            ],
+        ) {
+            self.set_mode(m);
+        }
+        // tuning or fret count changed since the question was made → new question
+        if self.stamp.is_some() && self.stamp != Some(ctx.stamp()) {
+            self.q_pos = None;
+            self.q_pitch = None;
+            self.targets.clear();
+            self.stamp = None;
+        }
         if self.mode != Mode::Explore {
             ui.horizontal(|ui| {
                 ui.label("Level:");
@@ -232,8 +248,9 @@ impl FretboardTrainer {
             }
         }
         let progress = &*ctx.progress;
+        let tuning_id = ctx.settings.tuning;
         let tint = |p: Pos| -> Option<Color32> {
-            let it = progress.get(&name_key(p))?;
+            let it = progress.get(&name_key(tuning_id, p))?;
             let a = it.accuracy();
             Some(Color32::from_rgba_unmultiplied(
                 (255.0 * (1.0 - a)) as u8,
@@ -244,7 +261,6 @@ impl FretboardTrainer {
         };
         let mut board = ctx.board(&dots);
         board.lines = &lines;
-        board.height = 240.0;
         board.clickable = true;
         if self.heatmap {
             board.tint = Some(&tint);
@@ -301,7 +317,8 @@ impl FretboardTrainer {
 
     fn new_name_question(&mut self, ctx: &mut Ctx) {
         let cands = self.candidates_name(ctx);
-        let keys: Vec<String> = cands.iter().map(|p| name_key(*p)).collect();
+        let tid = ctx.settings.tuning;
+        let keys: Vec<String> = cands.iter().map(|p| name_key(tid, *p)).collect();
         let mut i = ctx.progress.pick(ctx.rng, &keys);
         // avoid repeating the same position twice in a row
         if Some(cands[i]) == self.q_pos && cands.len() > 1 {
@@ -325,10 +342,11 @@ impl FretboardTrainer {
         let pc = pc_at(t, q);
         prompt(ui, &format!("Which note is this?  (string {}, fret {})", Tuning::string_number(q.string as usize), q.fret));
         hint(ui, "Try to answer without counting frets from the nut: use the dots, octave shapes and the notes you already know.");
-        let mut dots = vec![Dot::new(q, if self.advance_at.is_some() { ctx.pc_name(pc) } else { "?".into() }, BLUE).emphasis()];
-        if self.advance_at.is_some() {
-            dots[0].fill = GREEN;
-        }
+        let dots = if self.advance_at.is_some() {
+            vec![Dot::new(q, ctx.pc_name(pc), GREEN).emphasis()]
+        } else {
+            vec![Dot::question(q)]
+        };
         let mut board = ctx.board(&dots);
         board.zone = Some((0, self.max_fret(ctx)));
         board.show(ui);
@@ -338,7 +356,7 @@ impl FretboardTrainer {
             ctx.play_note(midi_at(t, q));
             if a == pc {
                 let ms = ctx.ms_since(self.started);
-                ctx.progress.record(&name_key(q), !self.wrong_once, Some(ms));
+                ctx.progress.record(&name_key(ctx.settings.tuning, q), !self.wrong_once, Some(ms));
                 self.marks.correct = Some(pc);
                 self.feedback = Some(Feedback {
                     text: format!("✔ {}  ({:.1} s)", ctx.pc_name(pc), ms / 1000.0),
@@ -358,7 +376,7 @@ impl FretboardTrainer {
         if self.advance_at.is_some() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         }
-        stats_line(ui, ctx, &name_key(q));
+        stats_line(ui, ctx, &name_key(ctx.settings.tuning, q));
     }
 
     // ------------------------------------------------------------------ find the note
@@ -367,13 +385,14 @@ impl FretboardTrainer {
         let l = &LEVELS[self.level];
         let max = self.max_fret(ctx);
         let pcs: Vec<Pc> = (0..12).filter(|&pc| !l.naturals || is_natural(pc)).collect();
+        let tid = ctx.settings.tuning;
         match self.variant {
             FindVariant::OnString => {
                 let keys: Vec<(Pc, u8)> = pcs
                     .iter()
                     .flat_map(|&pc| l.strings.iter().map(move |&s| (pc, s)))
                     .collect();
-                let names: Vec<String> = keys.iter().map(|(pc, s)| format!("fb:find:{pc}:s{s}")).collect();
+                let names: Vec<String> = keys.iter().map(|(pc, s)| format!("fb:find:{tid:?}:{pc}:s{s}")).collect();
                 let i = ctx.progress.pick(ctx.rng, &names);
                 (self.q_pc, self.q_string) = keys[i];
                 self.zone = (0, max);
@@ -383,17 +402,20 @@ impl FretboardTrainer {
                     .collect();
             }
             FindVariant::AllInZone => {
-                let names: Vec<String> = pcs.iter().map(|pc| format!("fb:zone:{pc}")).collect();
-                let i = ctx.progress.pick(ctx.rng, &names);
-                self.q_pc = pcs[i];
-                let start = ctx.rng.range(0, (max as i32 - 4).max(0)) as u8;
-                self.zone = (start, (start + 4).min(max));
-                self.targets = positions_of_pc(t, self.q_pc, self.zone.0, self.zone.1)
-                    .into_iter()
-                    .filter(|p| l.strings.contains(&p.string))
-                    .collect();
-                if self.targets.is_empty() {
-                    return self.new_find_question(ctx);
+                let names: Vec<String> = pcs.iter().map(|pc| format!("fb:zone:{tid:?}:{pc}")).collect();
+                // a few tries to find a zone that contains the note (capped, no recursion)
+                for _ in 0..50 {
+                    let i = ctx.progress.pick(ctx.rng, &names);
+                    self.q_pc = pcs[i];
+                    let start = ctx.rng.range(0, (max as i32 - 4).max(0)) as u8;
+                    self.zone = (start, (start + 4).min(max));
+                    self.targets = positions_of_pc(t, self.q_pc, self.zone.0, self.zone.1)
+                        .into_iter()
+                        .filter(|p| l.strings.contains(&p.string))
+                        .collect();
+                    if !self.targets.is_empty() {
+                        break;
+                    }
                 }
             }
         }
@@ -401,9 +423,10 @@ impl FretboardTrainer {
     }
 
     fn find_key(&self) -> String {
+        let tid = self.stamp.map(|s| s.tuning).unwrap_or_default();
         match self.variant {
-            FindVariant::OnString => format!("fb:find:{}:s{}", self.q_pc, self.q_string),
-            FindVariant::AllInZone => format!("fb:zone:{}", self.q_pc),
+            FindVariant::OnString => format!("fb:find:{tid:?}:{}:s{}", self.q_pc, self.q_string),
+            FindVariant::AllInZone => format!("fb:zone:{tid:?}:{}", self.q_pc),
         }
     }
 
@@ -519,7 +542,7 @@ impl FretboardTrainer {
             if self.found.contains(p) {
                 dots.push(Dot::new(*p, label, GREEN));
             } else if done {
-                dots.push(Dot::new(*p, label, if self.revealed { BLUE } else { RED }));
+                dots.push(Dot::new(*p, label, if self.revealed { MARKER } else { RED }));
             }
         }
         self.wrong_clicks.retain(|(_, at)| ctx.time - at < 1.0);
@@ -539,7 +562,8 @@ impl FretboardTrainer {
         let midis: Vec<i32> = (lo..=hi)
             .filter(|&m| !l.naturals || is_natural(m.rem_euclid(12) as Pc))
             .collect();
-        let keys: Vec<String> = midis.iter().map(|m| format!("fb:staff:{m}")).collect();
+        let tid = ctx.settings.tuning;
+        let keys: Vec<String> = midis.iter().map(|m| format!("fb:staff:{tid:?}:{m}")).collect();
         let m = midis[ctx.progress.pick(ctx.rng, &keys)];
         let pc = m.rem_euclid(12) as Pc;
         // accidentals: sometimes sharp, sometimes flat spelling
@@ -597,7 +621,7 @@ impl FretboardTrainer {
         board.zone = Some(self.zone);
         board.clickable = self.answer == AnswerMode::OnScreen && !done;
         let clicked = board.show(ui);
-        let key = format!("fb:staff:{}", p.midi());
+        let key = format!("fb:staff:{:?}:{}", ctx.settings.tuning, p.midi());
         if self.answer == AnswerMode::OnScreen {
             if let Some(c) = clicked {
                 self.on_target_click(ctx, c, &key);
@@ -624,8 +648,8 @@ fn sharp_letter(pc: Pc) -> Letter {
     Letter::from_index([0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6][pc as usize % 12])
 }
 
-pub fn name_key(p: Pos) -> String {
-    format!("fb:name:s{}f{}", p.string, p.fret)
+pub fn name_key(t: TuningId, p: Pos) -> String {
+    format!("fb:name:{t:?}:s{}f{}", p.string, p.fret)
 }
 
 pub fn stats_line(ui: &mut Ui, ctx: &Ctx, key: &str) {

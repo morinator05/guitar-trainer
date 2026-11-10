@@ -190,6 +190,7 @@ impl Naming {
                     match n.acc {
                         -1 => "B".to_string(),
                         0 => "H".to_string(),
+                        -2 => "Heses".to_string(),
                         a => format!("H{}", acc_symbols(a)),
                     }
                 } else {
@@ -292,6 +293,7 @@ mod tests {
         assert_eq!(Naming::GermanFull.note_name(Note::new(Letter::A, -1)), "As");
         assert_eq!(Naming::GermanFull.note_name(Note::new(Letter::D, -1)), "Des");
         assert_eq!(Naming::GermanFull.note_name(Note::new(Letter::F, 1)), "Fis");
+        assert_eq!(Naming::GermanHB.note_name(Note::new(Letter::B, -2)), "Heses");
     }
 
     #[test]

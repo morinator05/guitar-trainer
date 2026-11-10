@@ -6,13 +6,23 @@ use crate::srs::Progress;
 use crate::theory::fretboard::{Pos, pc_at};
 use crate::theory::interval::{Interval, interval_color};
 use crate::theory::note::{Note, Pc};
-use crate::theory::tuning::Tuning;
+use crate::theme;
+use crate::theory::tuning::{Tuning, TuningId};
 use crate::util::Rng;
 use crate::widgets::fretboard::{Dot, FretboardView, rgb};
+use crate::widgets::primary_button;
 use egui::{Color32, Key, RichText, Ui};
 
 pub enum Nav {
     Chord { root: Note, ty: &'static str },
+}
+
+/// The settings a drill question depends on. If they change (e.g. the user picks
+/// another tuning), the question is regenerated instead of showing stale data.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Stamp {
+    pub tuning: TuningId,
+    pub frets: u8,
 }
 
 pub struct Ctx<'a> {
@@ -28,6 +38,13 @@ pub struct Ctx<'a> {
 impl Ctx<'_> {
     pub fn tuning(&self) -> &'static Tuning {
         self.settings.tuning()
+    }
+
+    pub fn stamp(&self) -> Stamp {
+        Stamp {
+            tuning: self.settings.tuning,
+            frets: self.settings.frets,
+        }
     }
 
     pub fn play_note(&mut self, midi: i32) {
@@ -61,6 +78,7 @@ impl Ctx<'_> {
         v.dots = dots;
         v.left_handed = self.settings.left_handed;
         v.string_names = Some(self.string_names());
+        v.style = self.settings.fretboard_style;
         v
     }
 
@@ -114,24 +132,32 @@ pub fn self_rate(ui: &mut Ui) -> Option<bool> {
             r = Some(true);
         }
     });
-    ui.input(|i| {
-        if i.key_pressed(Key::Num1) {
-            r = Some(false);
-        } else if i.key_pressed(Key::Num2) || i.key_pressed(Key::Num3) {
-            r = Some(true);
-        }
-    });
+    if key_once(ui, Key::Num1) {
+        r = Some(false);
+    } else if key_once(ui, Key::Num2) || key_once(ui, Key::Num3) {
+        r = Some(true);
+    }
     r
 }
 
+/// A key press, ignoring key-repeat (holding Enter must not skip questions).
+pub fn key_once(ui: &Ui, key: Key) -> bool {
+    ui.input(|i| {
+        i.events.iter().any(|e| {
+            matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, modifiers, .. }
+                if *k == key && modifiers.is_none())
+        })
+    })
+}
+
 pub fn reveal_button(ui: &mut Ui) -> bool {
-    let b = ui.button(RichText::new("Reveal answer  (Space)").size(17.0)).clicked();
-    b || ui.input(|i| i.key_pressed(Key::Space))
+    let b = primary_button(ui, "Reveal answer  (Space)").clicked();
+    b || key_once(ui, Key::Space)
 }
 
 pub fn next_pressed(ui: &mut Ui) -> bool {
-    let b = ui.button(RichText::new("Next  (Space / Enter)").size(17.0)).clicked();
-    b || ui.input(|i| i.key_pressed(Key::Space) || i.key_pressed(Key::Enter))
+    let b = primary_button(ui, "Next  (Space / Enter)").clicked();
+    b || key_once(ui, Key::Space) || key_once(ui, Key::Enter)
 }
 
 /// Timed feedback message ("✔ correct", "✖ that was G").
@@ -142,11 +168,7 @@ pub struct Feedback {
 
 pub fn show_feedback(ui: &mut Ui, f: &Option<Feedback>) {
     if let Some(f) = f {
-        let c = if f.ok {
-            Color32::from_rgb(90, 200, 110)
-        } else {
-            Color32::from_rgb(230, 80, 80)
-        };
+        let c = if f.ok { theme::SUCCESS } else { theme::ERROR };
         ui.label(RichText::new(&f.text).size(20.0).strong().color(c));
     } else {
         ui.label(RichText::new(" ").size(20.0));
@@ -155,10 +177,12 @@ pub fn show_feedback(ui: &mut Ui, f: &Option<Feedback>) {
 
 /// Big prompt text.
 pub fn prompt(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(26.0).strong());
+    ui.label(RichText::new(text).size(25.0).strong().color(theme::TEXT_STRONG));
 }
 
-pub const RED: Color32 = Color32::from_rgb(220, 50, 47);
-pub const GREEN: Color32 = Color32::from_rgb(80, 190, 100);
-pub const GREY: Color32 = Color32::from_rgb(130, 130, 130);
-pub const BLUE: Color32 = Color32::from_rgb(70, 140, 230);
+/// Root-note red (same as the interval colour of the root).
+pub const RED: Color32 = Color32::from_rgb(224, 69, 63);
+pub const GREEN: Color32 = theme::SUCCESS;
+pub const GREY: Color32 = theme::NEUTRAL;
+/// Revealed answers / user markers: neutral, not a hint colour.
+pub const MARKER: Color32 = theme::MARKER;

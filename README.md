@@ -29,7 +29,11 @@ with a focus on blues and metal. Runs fully offline, uses about 40 MB of RAM for
 and a 30-question "today's practice" session across your weakest drills.
 
 **Settings**: E standard, D standard, Drop D, Drop C · English or German note names (H/B, Cis/Es) ·
-labels as notes or intervals · left-handed mirror · sound/volume · UI scale.
+labels as notes or intervals · fretboard look (realistic rosewood, realistic maple, or classic flat) ·
+left-handed mirror · sound/volume · UI scale.
+
+**Look**: dark theme with a muted dusty-rose accent. The realistic fretboards (wood grain, nickel frets,
+wound strings, pearl or black inlays) are drawn procedurally — no image files.
 
 Keyboard: `Space` reveal / next, `Enter` check, `1` `2` `3` self-rating.
 
@@ -55,8 +59,9 @@ cargo vendor --versioned-dirs vendor
 ## Data
 
 - Settings and progress: `~/.local/share/guitar-trainer/` (JSON).
-- Chord shapes: [chords-db](https://github.com/tombatossals/chords-db) (MIT), music font: Bravura (SIL OFL).
-  Both are embedded in the binary; see `data/LICENSES.md`.
+- Chord shapes: [chords-db](https://github.com/tombatossals/chords-db) (MIT), music font: Bravura (SIL OFL),
+  UI fonts bundled by egui (Ubuntu Font Licence, MIT, OFL). All embedded; see `data/LICENSES.md`.
+- Only free-to-use assets: anything new must be MIT/Apache/BSD/OFL/CC0 (or CC-BY with credit).
 
 ## Developer notes
 
