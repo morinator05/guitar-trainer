@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Guitar Trainer
+Comment=Learn the fretboard, chords and scales (offline)
+Exec=guitar-trainer
+Icon=audio-x-generic
+Terminal=false
+Categories=Education;Music;
+StartupWMClass=guitar-trainer
