@@ -39,7 +39,7 @@ pub const SCALE_TYPES: &[ScaleType] = &[
         category: ScaleCategory::BluesRock,
         parent: None,
         info: "The rock/blues workhorse. Five notes, no 'wrong' notes over a minor or dominant blues. \
-               Learn box 1 first (root under your index finger on the low string), then connect it to box 2 and box 5.",
+               Learn box 1 first (it starts on the root on the lowest string), then connect it to box 2 and box 5.",
     },
     ScaleType {
         id: "blues",

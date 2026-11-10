@@ -23,6 +23,19 @@ pub enum Drill {
 }
 
 impl Drill {
+    /// Beginner order: 0 = easiest.
+    pub fn difficulty(self) -> u8 {
+        match self {
+            Drill::FbName => 0,
+            Drill::ScFill => 1,
+            Drill::FbFind => 2,
+            Drill::ChRead => 3,
+            Drill::ScDegree => 4,
+            Drill::ChName => 5,
+            Drill::FbStaff => 6,
+        }
+    }
+
     pub const ALL: [Drill; 7] = [
         Drill::FbName,
         Drill::FbFind,
@@ -41,6 +54,18 @@ impl Drill {
             Drill::ChName => "Chords · name this chord",
             Drill::ScDegree => "Scales · which degree?",
             Drill::ScFill => "Scales · fill the box",
+        }
+    }
+    /// One-line "how this drill works", shown when a session switches to it.
+    pub fn how(self) -> &'static str {
+        match self {
+            Drill::FbName => "A dot appears on the neck: click (or type) the name of that note.",
+            Drill::FbFind => "A note name is given: click every place where it is on the neck.",
+            Drill::FbStaff => "A note is written on the staff: click where you can play it.",
+            Drill::ChRead => "A chord is given: click one note per string inside the zone, then Check.",
+            Drill::ChName => "A chord shape is shown: pick its root and its type.",
+            Drill::ScDegree => "One note of the scale shows \"?\": pick its scale degree (1 = root).",
+            Drill::ScFill => "Click every note of the scale inside the marked box.",
         }
     }
     pub fn prefixes(self) -> &'static [&'static str] {
@@ -91,7 +116,9 @@ impl Session {
             .iter()
             .map(|d| (d.accuracy(p).unwrap_or(0.55), *d))
             .collect();
-        plan.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // weakest first; untried drills (same score) from easy to hard, so the
+        // very first session doesn't start with the hardest material
+        plan.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.difficulty().cmp(&b.1.difficulty())));
         let plan: Vec<Drill> = plan.into_iter().map(|x| x.1).take(5).collect();
         let block_base = drill_attempts(p, plan[0]);
         Session {
@@ -102,6 +129,9 @@ impl Session {
             total: 30,
             per_block: 6,
         }
+    }
+    pub fn plan(&self) -> &[Drill] {
+        &self.plan
     }
     pub fn current(&self) -> Drill {
         self.plan[self.step % self.plan.len()]
@@ -168,16 +198,18 @@ pub fn ui(ui: &mut Ui, ctx: &mut Ctx) -> bool {
     egui::ScrollArea::vertical().id_salt("progress").show(ui, |ui| {
         let d = ctx.progress.today();
         heading(ui, "Today");
-        ui.label(
-            RichText::new(format!(
+        let status = if d.attempts == 0 {
+            "No answers yet today – start a session below.".to_string()
+        } else {
+            format!(
                 "{} answers · {:.0}% correct · streak: {} day{}",
                 d.attempts,
-                if d.attempts > 0 { d.correct as f32 * 100.0 / d.attempts as f32 } else { 0.0 },
+                d.correct as f32 * 100.0 / d.attempts as f32,
                 ctx.progress.streak(),
                 if ctx.progress.streak() == 1 { "" } else { "s" }
-            ))
-            .size(18.0),
-        );
+            )
+        };
+        ui.label(RichText::new(status).size(18.0));
         ui.add_space(6.0);
         if primary_button(ui, "▶  Start today's practice  (30 questions, weakest areas first)").clicked() {
             start = true;
@@ -198,8 +230,11 @@ pub fn ui(ui: &mut Ui, ctx: &mut Ctx) -> bool {
                 }
                 match dr.accuracy(ctx.progress) {
                     Some(acc) => {
-                        let c = Color32::from_rgb((230.0 * (1.0 - acc)) as u8 + 20, (200.0 * acc) as u8 + 30, 70);
-                        ui.label(RichText::new(format!("{:.0}%", acc * 100.0)).size(16.0).color(c));
+                        // number + bar: no red/green
+                        ui.horizontal(|ui| {
+                            ui.add(egui::ProgressBar::new(acc).desired_width(90.0).fill(crate::screens::fretboard_trainer::heat(acc)));
+                            ui.label(RichText::new(format!("{:.0}%", acc * 100.0)).size(16.0).strong());
+                        });
                         ui.label(format!("{att} answers · {items} items"));
                     }
                     None => {
@@ -214,15 +249,15 @@ pub fn ui(ui: &mut Ui, ctx: &mut Ctx) -> bool {
         ui.add_space(10.0);
         heading(ui, "Fretboard heatmap (name the note)");
         hint(ui, &format!(
-            "Green = you know it, red = weak, empty = not practised yet. Tuning: {}.",
-            ctx.tuning().name
+            "Brighter = you know it, dark = weak, no tint = not practised yet. Tuning: {}.",
+            ctx.tuning_name()
         ));
         let progress = &*ctx.progress;
         let tuning_id = ctx.settings.tuning;
         let tint = |p: Pos| -> Option<Color32> {
             let it = progress.get(&name_key(tuning_id, p))?;
             let a = it.accuracy();
-            Some(Color32::from_rgba_unmultiplied((255.0 * (1.0 - a)) as u8, (210.0 * a) as u8, 60, 170))
+            Some(crate::screens::fretboard_trainer::heat(a))
         };
         let mut board = ctx.board(&[]);
         board.tint = Some(&tint);

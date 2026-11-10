@@ -60,6 +60,10 @@ impl Ctx<'_> {
         }
     }
 
+    pub fn tuning_name(&self) -> String {
+        self.tuning().label(self.settings.naming)
+    }
+
     pub fn name(&self, n: Note) -> String {
         n.name(self.settings.naming)
     }
@@ -92,7 +96,8 @@ impl Ctx<'_> {
             LabelMode::Intervals => interval.map(|i| i.label()).unwrap_or_default(),
             LabelMode::None => String::new(),
         };
-        Dot::new(pos, label, rgb(interval_color(semis)))
+        let d = Dot::new(pos, label, rgb(interval_color(semis)));
+        if semis == 0 { d.root() } else { d }
     }
 
     pub fn ms_since(&self, start: f64) -> f32 {
@@ -167,18 +172,40 @@ pub struct Feedback {
     pub ok: bool,
 }
 
+/// Right/wrong banner: big, glyph first, always the same height so the layout
+/// below it never jumps.
 pub fn show_feedback(ui: &mut Ui, f: &Option<Feedback>) {
-    if let Some(f) = f {
-        let c = if f.ok { theme::SUCCESS } else { theme::ERROR };
-        ui.label(RichText::new(&f.text).size(20.0).strong().color(c));
+    let h = 46.0;
+    let w = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+    let Some(f) = f else { return };
+    let p = ui.painter();
+    let (c, fill) = if f.ok {
+        (theme::SUCCESS, Color32::from_rgb(0x1A, 0x2E, 0x40))
     } else {
-        ui.label(RichText::new(" ").size(20.0));
-    }
+        (theme::ERROR, Color32::from_rgb(0x3A, 0x2A, 0x14))
+    };
+    p.rect(rect, 6.0, fill, egui::Stroke::new(2.5, c), egui::StrokeKind::Inside);
+    // thick bar on the left: a second, non-text cue
+    let bar = egui::Rect::from_min_size(rect.min, egui::vec2(8.0, h));
+    p.rect_filled(bar, egui::CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, c);
+    p.text(
+        rect.left_center() + egui::vec2(22.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        &f.text,
+        egui::FontId::proportional(24.0),
+        theme::TEXT_STRONG,
+    );
+}
+
+/// Neck border flash for the current feedback (None = no flash).
+pub fn flash(f: &Option<Feedback>) -> Option<bool> {
+    f.as_ref().map(|f| f.ok)
 }
 
 /// Big prompt text.
 pub fn prompt(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(25.0).strong().color(theme::TEXT_STRONG));
+    ui.label(RichText::new(text).size(28.0).strong().color(theme::TEXT_STRONG));
 }
 
 /// Root-note red (same as the interval colour of the root).

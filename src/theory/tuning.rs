@@ -100,6 +100,14 @@ impl Tuning {
             .then_some(d)
     }
 
+    /// Name with the open strings spelled in the user's note naming,
+    /// e.g. "E standard (E A D G H E)" in German.
+    pub fn label(&self, naming: super::note::Naming) -> String {
+        let short = self.name.split(" (").next().unwrap_or(self.name);
+        let notes: Vec<String> = self.strings.iter().map(|p| p.note.name(naming)).collect();
+        format!("{short} ({})", notes.join(" "))
+    }
+
     /// Guitarist's string number: 6 = lowest.
     pub fn string_number(string: usize) -> usize {
         6 - string

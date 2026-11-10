@@ -19,6 +19,10 @@ pub struct Dot {
     pub hollow: bool,
     /// Bigger with a ring (current note, the question, ...).
     pub emphasis: bool,
+    /// Root note: drawn as a rounded square, so it never depends on colour.
+    pub root: bool,
+    /// The "which note is this?" marker: thick double ring, inlays dimmed.
+    pub question: bool,
 }
 
 impl Dot {
@@ -29,11 +33,19 @@ impl Dot {
             fill,
             hollow: false,
             emphasis: false,
+            root: false,
+            question: false,
         }
     }
     /// A neutral "which note is this?" dot that gives nothing away.
     pub fn question(pos: Pos) -> Dot {
-        Dot::new(pos, "?", theme::QUESTION).emphasis()
+        let mut d = Dot::new(pos, "?", theme::QUESTION).emphasis();
+        d.question = true;
+        d
+    }
+    pub fn root(mut self) -> Dot {
+        self.root = true;
+        self
     }
     pub fn hollow(mut self) -> Dot {
         self.hollow = true;
@@ -59,6 +71,8 @@ pub struct FretboardView<'a> {
     pub height: Option<f32>,
     pub string_names: Option<[String; 6]>,
     pub style: FretStyle,
+    /// Right/wrong flash around the neck (Some(true) = correct).
+    pub flash: Option<bool>,
 }
 
 const NUT: Color32 = Color32::from_rgb(0xEC, 0xE4, 0xD2);
@@ -101,6 +115,7 @@ impl<'a> FretboardView<'a> {
             height: None,
             string_names: None,
             style: FretStyle::Rosewood,
+            flash: None,
         }
     }
 
@@ -109,7 +124,11 @@ impl<'a> FretboardView<'a> {
         let width = ui.available_width().max(300.0);
         let height = self
             .height
-            .unwrap_or_else(|| (ui.available_height() * 0.45).clamp(220.0, 330.0));
+            .unwrap_or_else(|| {
+                // big, but always leave room for the answer row and feedback below
+                let h = ui.available_height();
+                (h * 0.55).min(h - 250.0).clamp(200.0, 480.0)
+            });
         let sense = if self.clickable { Sense::click() } else { Sense::hover() };
         let (resp, painter) = ui.allocate_painter(Vec2::new(width, height), sense);
         let rect = resp.rect;
@@ -117,21 +136,21 @@ impl<'a> FretboardView<'a> {
         let maple = self.style == FretStyle::Maple;
 
         // ---------------------------------------------------------------- layout
-        let name_w = 26.0;
-        let numbers_h = 24.0;
+        let name_w = 34.0;
+        let numbers_h = 26.0;
         let neck_top = rect.top() + 2.0;
         let neck_bottom = rect.bottom() - numbers_h;
         let gap = (neck_bottom - neck_top) / 6.0;
         let top = neck_top + gap * 0.5;
         let bottom = neck_bottom - gap * 0.5;
         let frets = self.max_fret.max(1) as f32;
-        let r_est = (gap * 0.42).clamp(8.0, 16.0);
+        let r_est = (gap * 0.42).clamp(8.0, 21.0);
         let open_w = 2.0 * r_est + 10.0;
         let nut_w = if real { 7.0 } else { 5.0 };
         let nut_x = rect.left() + name_w + open_w;
         let fw = (rect.right() - 8.0 - nut_x) / frets;
         let neck_right = nut_x + frets * fw;
-        let r = (gap.min(fw) * 0.42).clamp(7.0, 16.0);
+        let r = (gap.min(fw) * 0.42).clamp(7.0, 21.0);
 
         let mirror = |x: f32| if self.left_handed { rect.left() + rect.right() - x } else { x };
         let mrect = |x0: f32, x1: f32, y0: f32, y1: f32| {
@@ -191,7 +210,13 @@ impl<'a> FretboardView<'a> {
         // ---------------------------------------------------------------- inlays
         let dot_at = |f: u8, strings: &[u8]| self.dots.iter().any(|d| d.pos.fret == f && strings.contains(&d.pos.string));
         let inlay_r = (gap.min(fw) * 0.17).clamp(3.0, 6.5);
+        // while a question is shown, inlays fade so they can't be mistaken for it
+        let quiz = self.dots.iter().any(|d| d.question);
         let inlay = |c: Pos2| {
+            if quiz {
+                painter.circle_filled(c, inlay_r * 0.8, if maple { shade(90) } else { Color32::from_white_alpha(45) });
+                return;
+            }
             if real {
                 let col = if maple { BLACK_DOT } else { PEARL };
                 painter.circle_filled(c, inlay_r, col);
@@ -255,7 +280,7 @@ impl<'a> FretboardView<'a> {
             painter.rect_stroke(
                 mrect(x0, x1, neck_top - 1.0, neck_bottom + 1.0),
                 3.0,
-                Stroke::new(1.5, Color32::from_white_alpha(150)),
+                Stroke::new(2.5, Color32::from_white_alpha(170)),
                 StrokeKind::Outside,
             );
         }
@@ -293,7 +318,6 @@ impl<'a> FretboardView<'a> {
         }
 
         // ---------------------------------------------------------------- labels
-        let text_col = theme::TEXT;
         for f in 1..=self.max_fret {
             let x = mirror(fret_center_x(f));
             let strong = matches!(f % 12, 0 | 3 | 5 | 7 | 9);
@@ -301,14 +325,14 @@ impl<'a> FretboardView<'a> {
                 Pos2::new(x, neck_bottom + 4.0),
                 Align2::CENTER_TOP,
                 f.to_string(),
-                FontId::proportional(if strong { 14.0 } else { 11.5 }),
-                if strong { text_col } else { theme::TEXT_WEAK },
+                FontId::proportional(if strong { 16.0 } else { 13.0 }),
+                if strong { theme::TEXT_STRONG } else { theme::TEXT_WEAK },
             );
         }
         if let Some(names) = &self.string_names {
             for s in 0..6u8 {
                 let x = if self.left_handed { rect.right() - name_w * 0.5 } else { rect.left() + name_w * 0.5 };
-                painter.text(Pos2::new(x, string_y(s)), Align2::CENTER_CENTER, &names[s as usize], FontId::monospace(13.0), theme::TEXT_WEAK);
+                painter.text(Pos2::new(x, string_y(s)), Align2::CENTER_CENTER, &names[s as usize], FontId::proportional(16.0), theme::TEXT);
             }
         }
 
@@ -331,39 +355,70 @@ impl<'a> FretboardView<'a> {
             let s = ((bottom - p.y) / gap).round().clamp(0.0, 5.0);
             Some(Pos::new(s as u8, fret))
         });
-        if self.clickable && let Some(h) = hovered {
-            painter.circle_stroke(pt(h), r, Stroke::new(2.0, Color32::from_white_alpha(130)));
+        let in_zone = |p: Pos| self.zone.is_none_or(|(lo, hi)| p.fret >= lo && p.fret <= hi);
+        if self.clickable && let Some(h) = hovered.filter(|h| in_zone(*h)) {
+            // thinner than any placed dot's ring: a preview, not an answer
+            painter.circle_stroke(pt(h), r + 1.0, Stroke::new(1.0, shade(160)));
+            painter.circle_stroke(pt(h), r, Stroke::new(1.8, Color32::from_white_alpha(170)));
         }
 
         // ---------------------------------------------------------------- dots
         let ring = if maple { Color32::from_rgb(0x2A, 0x1D, 0x14) } else { Color32::from_rgb(0xF2, 0xEC, 0xE8) };
         for d in self.dots {
             let c = pt(d.pos);
-            let rr = if d.emphasis { r * 1.12 } else { r };
+            let rr = if d.question { r * 1.25 } else if d.emphasis { r * 1.12 } else { r };
             if d.hollow {
-                painter.circle_stroke(c, rr * 0.8, Stroke::new(1.8, d.fill));
+                // faint dark disc + thick ring: recessive but never lost on the wood
+                // translucent fills are deliberate "ghost" context rings: keep them light
+                if d.fill.a() == 255 {
+                    painter.circle_filled(c, rr * 0.82, shade(120));
+                }
+                painter.circle_stroke(c, rr * 0.82, Stroke::new(if d.fill.a() == 255 { 2.5 } else { 1.8 }, d.fill));
+            } else if d.root {
+                let sq = Rect::from_center_size(c, Vec2::splat(rr * 1.8));
+                painter.rect_filled(sq.translate(Vec2::new(1.0, 1.8)), 4.0, shade(90));
+                painter.rect_filled(sq, 4.0, d.fill);
+                painter.rect_stroke(sq, 4.0, Stroke::new(2.0, Color32::from_white_alpha(200)), StrokeKind::Outside);
             } else {
                 painter.circle_filled(c + Vec2::new(1.0, 1.8), rr + 0.5, shade(90));
                 painter.circle_filled(c, rr, d.fill);
                 painter.circle_stroke(c, rr, Stroke::new(1.2, shade(150)));
+                // light rim so dark swatches stay visible on dark wood
+                painter.circle_stroke(c, rr + 1.0, Stroke::new(1.5, Color32::from_white_alpha(150)));
             }
-            if d.emphasis {
+            if d.question {
+                painter.circle_stroke(c, rr + 6.0, Stroke::new(2.0, shade(200)));
+                painter.circle_stroke(c, rr + 3.5, Stroke::new(4.0, Color32::WHITE));
+            } else if d.emphasis {
                 painter.circle_stroke(c, rr + 3.0, Stroke::new(2.5, ring));
             }
             if !d.label.is_empty() {
-                let tc = if d.hollow { if maple { BLACK_DOT } else { text_col } } else { contrast_text(d.fill) };
-                let size = if d.label.chars().count() > 2 { r * 0.85 } else { r * 1.05 };
+                let tc = if d.hollow { if maple { BLACK_DOT } else { theme::TEXT_STRONG } } else { contrast_text(d.fill) };
+                let size = if d.label.chars().count() > 2 { rr * 0.85 } else { rr * 1.05 };
                 painter.text(c, Align2::CENTER_CENTER, &d.label, FontId::proportional(size), tc);
             }
+        }
+
+        // ---------------------------------------------------------------- right/wrong flash
+        if let Some(ok) = self.flash {
+            let c = if ok { theme::SUCCESS } else { theme::ERROR };
+            let r = mrect(nut_x - open_w, neck_right, neck_top, neck_bottom).expand(5.0);
+            painter.rect_stroke(r, 6.0, Stroke::new(5.0, c), StrokeKind::Outside);
         }
 
         if self.clickable && resp.clicked() { hovered } else { None }
     }
 }
 
+/// Black or white label, whichever has the higher WCAG contrast on `bg`.
 pub fn contrast_text(bg: Color32) -> Color32 {
-    let l = 0.299 * bg.r() as f32 + 0.587 * bg.g() as f32 + 0.114 * bg.b() as f32;
-    if l > 140.0 { Color32::BLACK } else { Color32::WHITE }
+    let lin = |c: u8| {
+        let c = c as f32 / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    let l = 0.2126 * lin(bg.r()) + 0.7152 * lin(bg.g()) + 0.0722 * lin(bg.b());
+    // contrast vs black (l+0.05)/0.05, vs white 1.05/(l+0.05): equal at l ≈ 0.179
+    if l > 0.179 { Color32::BLACK } else { Color32::WHITE }
 }
 
 pub fn rgb(c: [u8; 3]) -> Color32 {

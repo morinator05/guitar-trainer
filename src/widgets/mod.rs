@@ -14,12 +14,18 @@ pub struct Marks {
     pub wrong: Option<Pc>,
 }
 
+/// Answer button. Correct = filled + ✔, wrong = outlined + ✖, so the state never
+/// depends on colour alone.
 fn answer_button(text: &str, state: Option<bool>, min: egui::Vec2) -> egui::Button<'static> {
-    let t = RichText::new(text.to_string()).size(18.0);
+    let size = if text.contains('\n') { 17.0 } else { 20.0 };
     match state {
-        Some(true) => egui::Button::new(t.color(Color32::BLACK)).fill(theme::SUCCESS),
-        Some(false) => egui::Button::new(t.color(Color32::BLACK)).fill(theme::ERROR),
-        None => egui::Button::new(t),
+        Some(true) => egui::Button::new(RichText::new(format!("✔ {text}")).size(size).strong().color(Color32::BLACK))
+            .fill(theme::SUCCESS)
+            .stroke(Stroke::new(2.0, theme::TEXT_STRONG)),
+        Some(false) => egui::Button::new(RichText::new(format!("✖ {text}")).size(size).strong().color(theme::ERROR))
+            .fill(theme::EXTREME)
+            .stroke(Stroke::new(3.0, theme::ERROR)),
+        None => egui::Button::new(RichText::new(text.to_string()).size(size)),
     }
     .min_size(min)
 }
@@ -27,7 +33,12 @@ fn answer_button(text: &str, state: Option<bool>, min: egui::Vec2) -> egui::Butt
 /// 12 buttons, one per pitch class. Returns the clicked pitch class.
 pub fn note_picker(ui: &mut Ui, naming: Naming, marks: Marks, enabled: bool) -> Option<Pc> {
     let mut out = None;
+    // one row of 12 equally wide buttons when it fits (fixed positions = muscle memory)
+    let gap = 6.0;
+    let w = (((ui.available_width() - 12.0 * gap) / 12.0).floor() - 1.0).clamp(38.0, 110.0);
     ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        ui.spacing_mut().button_padding.x = 4.0;
         for pc in 0..12u8 {
             let state = if marks.correct == Some(pc) {
                 Some(true)
@@ -36,13 +47,38 @@ pub fn note_picker(ui: &mut Ui, naming: Naming, marks: Marks, enabled: bool) -> 
             } else {
                 None
             };
-            let b = answer_button(&pc_button_label(pc, naming), state, egui::vec2(66.0, 42.0));
+            // sharp and flat name stacked, so 12 buttons fit in one row
+            let label = pc_button_label(pc, naming).replace('/', "\n");
+            let b = answer_button(&label, state, egui::vec2(w, 56.0));
             if ui.add_enabled(enabled, b).clicked() {
                 out = Some(pc);
             }
         }
     });
+    if enabled && out.is_none() {
+        out = letter_key(ui, naming);
+    }
     out
+}
+
+/// Natural notes from the keyboard: C D E F G A B (German: H = B natural, B = B flat).
+fn letter_key(ui: &Ui, naming: Naming) -> Option<Pc> {
+    use egui::Key::*;
+    let german = naming != Naming::English;
+    let mut keys = vec![(C, 0), (D, 2), (E, 4), (F, 5), (G, 7), (A, 9)];
+    if german {
+        keys.extend([(H, 11), (B, 10)]);
+    } else {
+        keys.push((B, 11));
+    }
+    ui.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } if modifiers.is_none() => {
+                keys.iter().find(|(k, _)| k == key).map(|(_, pc)| *pc)
+            }
+            _ => None,
+        })
+    })
 }
 
 /// Row of text buttons; returns the index clicked.
@@ -57,7 +93,7 @@ pub fn choice_buttons(ui: &mut Ui, items: &[String], correct: Option<usize>, wro
             } else {
                 None
             };
-            if ui.add_enabled(enabled, answer_button(it, state, egui::vec2(58.0, 38.0))).clicked() {
+            if ui.add_enabled(enabled, answer_button(it, state, egui::vec2(72.0, 48.0))).clicked() {
                 out = Some(i);
             }
         }
@@ -84,7 +120,7 @@ pub fn tab_bar<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, tabs: &[(T, &s
             } else if r.hovered() {
                 ui.painter().line_segment(
                     [egui::pos2(r.rect.left(), line_y), egui::pos2(r.rect.right(), line_y)],
-                    Stroke::new(2.0, theme::STROKE),
+                    Stroke::new(2.0, theme::OUTLINE),
                 );
             }
             if r.clicked() && !sel {
@@ -100,11 +136,11 @@ pub fn tab_bar<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, tabs: &[(T, &s
 
 /// The one accent-filled button for the main action of a screen.
 pub fn primary_button(ui: &mut Ui, text: &str) -> Response {
-    let fill = theme::ACCENT;
     ui.add(
-        egui::Button::new(RichText::new(text).size(17.0).color(theme::TEXT_STRONG))
-            .fill(fill)
-            .min_size(egui::vec2(0.0, 36.0)),
+        egui::Button::new(RichText::new(text).size(18.0).strong().color(Color32::WHITE))
+            .fill(theme::PRIMARY)
+            .stroke(Stroke::new(1.0, theme::ACCENT_HOVER))
+            .min_size(egui::vec2(0.0, 40.0)),
     )
 }
 
@@ -113,5 +149,5 @@ pub fn heading(ui: &mut Ui, text: &str) {
 }
 
 pub fn hint(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(14.0).color(theme::TEXT_WEAK));
+    ui.label(RichText::new(text).size(15.0).color(theme::TEXT_WEAK));
 }

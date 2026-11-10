@@ -10,6 +10,11 @@ use egui::{Align2, Color32, FontFamily, FontId, Painter, Pos2, Rect, Sense, Stro
 
 pub const MUSIC_FONT: &str = "bravura";
 
+/// Staff sizes (space between two staff lines, in points). Drills, where the staff
+/// *is* the question, use the big one; libraries and reference views the small one.
+pub const STAFF_DRILL: f32 = 15.0;
+pub const STAFF_LIB: f32 = 11.0;
+
 const G_CLEF_8VB: char = '\u{E052}';
 const NOTEHEAD_WHOLE: char = '\u{E0A2}';
 const NOTEHEAD_BLACK: char = '\u{E0A4}';
@@ -54,7 +59,15 @@ impl<'a> NotationView<'a> {
     pub fn show(self, ui: &mut Ui) {
         let sp = self.staff_space;
         let col_w = if self.whole_notes { sp * 5.0 } else { sp * 3.2 };
-        let staff_h = if self.staff { sp * 13.5 } else { 0.0 };
+        // room above/below the 5 lines grows with the highest/lowest note: nothing is clipped
+        let positions = self.columns.iter().flat_map(|c| c.pitches.iter()).map(|p| {
+            let written = Pitch { note: p.note, octave: p.octave + 1 };
+            written.diatonic_step() - E4_STEP
+        });
+        let (lo_all, hi_all) = positions.fold((0, 8), |(lo, hi), p| (lo.min(p), hi.max(p)));
+        let above = (4.5f32).max((hi_all - 8) as f32 * 0.5 + 2.5);
+        let below = (5.0f32).max(-lo_all as f32 * 0.5 + 2.5);
+        let staff_h = if self.staff { sp * (above + 4.0 + below) } else { 0.0 };
         let tab_gap = sp * 1.4;
         let tab_h = if self.tab { tab_gap * 5.0 + sp * 4.5 } else { 0.0 };
         let left_w = sp * 5.0;
@@ -71,13 +84,13 @@ impl<'a> NotationView<'a> {
         let right = (rect.left() + left_w + col_w * self.columns.len() as f32 + sp).min(rect.right());
 
         if self.staff {
-            let bottom_line = rect.top() + sp * 8.5;
+            let bottom_line = rect.top() + sp * (above + 4.0);
             let line_y = |p: i32| bottom_line - p as f32 * sp * 0.5;
             for l in 0..5 {
                 let y = line_y(l * 2);
                 painter.line_segment(
                     [Pos2::new(rect.left(), y), Pos2::new(right, y)],
-                    Stroke::new(1.0, ink.gamma_multiply(0.8)),
+                    Stroke::new(1.3, ink.gamma_multiply(0.85)),
                 );
             }
             // clef: baseline on the G line (p = 2)
@@ -104,8 +117,8 @@ impl<'a> NotationView<'a> {
                 let led = |p: i32| {
                     let y = line_y(p);
                     painter.line_segment(
-                        [Pos2::new(x - head_w * 0.8, y), Pos2::new(x + head_w * 0.8, y)],
-                        Stroke::new(1.2, ink),
+                        [Pos2::new(x - head_w * 0.95, y), Pos2::new(x + head_w * 0.95, y)],
+                        Stroke::new(1.6, ink),
                     );
                 };
                 let mut p = -2;

@@ -12,7 +12,7 @@ use crate::theory::tuning::{Tuning, TuningId};
 use crate::theory::voicing::{self, GenOptions, Source, Voicing};
 use crate::widgets::chord_diagram::ChordDiagram;
 use crate::widgets::fretboard::{Dot, rgb};
-use crate::widgets::notation::{Column, NotationView};
+use crate::widgets::notation::{Column, NotationView, STAFF_DRILL, STAFF_LIB};
 use crate::widgets::{Marks, choice_buttons, heading, hint, note_picker, primary_button, tab_bar};
 use egui::{Color32, RichText, ScrollArea, Ui};
 use std::collections::HashMap;
@@ -241,7 +241,7 @@ impl Chords {
             for (i, n) in chord.ty.intervals().iter().zip(chord.notes()) {
                 let c = rgb(interval_color(i.pc_offset()));
                 ui.label(
-                    RichText::new(format!(" {} = {} ", i.formula_name(), ctx.name(n)))
+                    RichText::new(format!(" {} = {} ", i.label(), ctx.name(n)))
                         .size(17.0)
                         .background_color(c)
                         .color(crate::widgets::fretboard::contrast_text(c)),
@@ -253,7 +253,7 @@ impl Chords {
             .intervals()
             .iter()
             .filter(|i| !i.long_name().is_empty())
-            .map(|i| format!("{} ({})", i.formula_name(), i.long_name()))
+            .map(|i| format!("{} ({})", i.label(), i.long_name()))
             .collect();
         hint(ui, &names.join(" · "));
         ui.label(RichText::new(chord.ty.info).size(15.0));
@@ -432,7 +432,7 @@ impl Chords {
                         label: String::new(),
                     }];
                     let mut nv = NotationView::new(&cols);
-                    nv.staff_space = 9.0;
+                    nv.staff_space = STAFF_LIB;
                     ui.allocate_ui(egui::vec2(200.0, 260.0), |ui| nv.show(ui));
                     ui.add_space(6.0);
                     ui.label(RichText::new("Chord tones, close position:").strong());
@@ -443,7 +443,7 @@ impl Chords {
                     }];
                     let mut nv = NotationView::new(&cols);
                     nv.tab = false;
-                    nv.staff_space = 9.0;
+                    nv.staff_space = STAFF_LIB;
                     ui.allocate_ui(egui::vec2(200.0, 140.0), |ui| nv.show(ui));
                 });
             });
@@ -498,11 +498,22 @@ impl Chords {
         if let Some(p) = board.show(ui) {
             ctx.play_note(midi_at(t, p));
         }
-        hint(ui, "All chord tones inside the zone, labelled by interval. The ringed dot is the root. Pick one tone per string to build your own voicing.");
+        hint(ui, "All chord tones inside the zone, labelled by interval. The square (1) is the root. Pick one tone per string to build your own voicing.");
 
         heading(ui, "Where is each chord tone, seen from the root?");
-        if t.open_midi(4) - t.open_midi(3) == 4 {
-            hint(ui, "Shapes that cross from the G to the B string move one fret higher (G→B is a major 3rd, every other string pair is a 4th).");
+        // string pairs that are not a 4th shift shapes; worked out from the tuning
+        let names = ctx.string_names();
+        let odd: Vec<String> = (0..5)
+            .filter_map(|s| {
+                let d = t.open_midi(s + 1) - t.open_midi(s);
+                (d != 5).then(|| {
+                    let shift = if d < 5 { "one fret higher" } else { format!("{} frets lower", d - 5).leak() };
+                    format!("{}→{} ({} semitones): shapes move {shift}", names[s], names[s + 1], d)
+                })
+            })
+            .collect();
+        if !odd.is_empty() {
+            hint(ui, &format!("Most string pairs are a 4th apart. Exceptions in this tuning – {}.", odd.join("; ")));
         }
         for (i, n) in chord.ty.intervals().iter().zip(chord.notes()) {
             if i.number == 1 && i.alter == 0 {
@@ -535,13 +546,23 @@ impl Chords {
                 let ways: Vec<String> = found.iter().take(3).map(|(_, p)| describe(*p)).collect();
                 format!("{} ({}): {}", i.label(), ctx.name(n), ways.join("   or   "))
             };
+            // colour only in a chip; the text itself stays high-contrast
             let c = rgb(interval_color(i.pc_offset()));
-            ui.label(RichText::new(format!("•  {text}")).size(16.0).color(c));
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!(" {} ", i.label()))
+                        .size(16.0)
+                        .strong()
+                        .background_color(c)
+                        .color(crate::widgets::fretboard::contrast_text(c)),
+                );
+                ui.label(RichText::new(text).size(16.0));
+            });
         }
     }
 
     // ------------------------------------------------------------------ drills
-    fn drill_settings(&mut self, ui: &mut Ui) -> bool {
+    fn drill_settings(&mut self, ui: &mut Ui, ctx: &Ctx) -> bool {
         let mut changed = false;
         ui.horizontal_wrapped(|ui| {
             ui.label("Chord types:");
@@ -552,7 +573,10 @@ impl Chords {
                 self.pool[0] = true;
             }
             ui.separator();
-            changed |= ui.checkbox(&mut self.natural_roots, "only natural roots (C D E F G A B)").changed();
+            let naturals: Vec<String> = [0u8, 2, 4, 5, 7, 9, 11].iter().map(|&pc| ctx.pc_name(pc)).collect();
+            changed |= ui
+                .checkbox(&mut self.natural_roots, format!("only natural roots ({})", naturals.join(" ")))
+                .changed();
             if self.tab == Tab::SightRead {
                 ui.separator();
                 ui.label("Prompt:");
@@ -623,11 +647,27 @@ impl Chords {
         self.reset_q(ctx);
     }
 
-    fn sight_read(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
-        if self.drill_settings(ui) {
-            self.read_q = None;
+    /// Drill options; folded away on short windows so the task keeps the space.
+    fn options(&mut self, ui: &mut Ui, ctx: &Ctx, with_answer_mode: bool) -> bool {
+        let mut changed = false;
+        let mut body = |this: &mut Self, ui: &mut Ui| {
+            changed |= this.drill_settings(ui, ctx);
+            if with_answer_mode {
+                changed |= answer_mode_picker(ui, &mut this.answer);
+            }
+        };
+        if ui.available_height() < 600.0 {
+            egui::CollapsingHeader::new(RichText::new("⚙ Drill options").size(16.0))
+                .id_salt("ch_drill_opts")
+                .show(ui, |ui| body(self, ui));
+        } else {
+            body(self, ui);
         }
-        if answer_mode_picker(ui, &mut self.answer) {
+        changed
+    }
+
+    fn sight_read(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
+        if self.options(ui, ctx, true) {
             self.read_q = None;
         }
         ui.separator();
@@ -651,7 +691,7 @@ impl Chords {
             }];
             let mut nv = NotationView::new(&cols);
             nv.tab = false;
-            nv.staff_space = 11.0;
+            nv.staff_space = STAFF_DRILL;
             nv.show(ui);
         } else {
             ui.horizontal(|ui| {
@@ -669,6 +709,9 @@ impl Chords {
                 let pc = pc_at(t, p);
                 if show_answers {
                     dots.push(ctx.interval_dot(p, chord.root, chord.interval_of(pc), chord.spell(pc)));
+                } else if self.feedback.as_ref().is_some_and(|f| !f.ok) && chord.interval_of(pc).is_none() {
+                    // after a failed check: point at the strings with a wrong note
+                    dots.push(Dot::new(p, "✖", crate::theme::ERROR).hollow());
                 } else {
                     dots.push(Dot::new(p, "", MARKER));
                 }
@@ -695,6 +738,7 @@ impl Chords {
         let mut board = ctx.board(&dots);
         board.zone = Some(zone);
         board.clickable = self.answer == AnswerMode::OnScreen && !show_answers;
+        board.flash = flash(&self.feedback);
         if let Some(p) = board.show(ui) {
             let s = p.string as usize;
             self.clicked[s] = if self.clicked[s] == Some(p.fret) { None } else { Some(p.fret) };
@@ -830,7 +874,7 @@ impl Chords {
     }
 
     fn name_it(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
-        if self.drill_settings(ui) {
+        if self.options(ui, ctx, false) {
             self.name_q = None;
         }
         ui.separator();
@@ -876,18 +920,18 @@ impl Chords {
             }];
             let mut nv = NotationView::new(&cols);
             nv.tab = false;
-            nv.staff_space = 11.0;
+            nv.staff_space = STAFF_DRILL;
             nv.show(ui);
         }
         let enabled = self.advance_at.is_none();
-        ui.label("Root:");
+        ui.label(RichText::new("Root:").size(17.0).strong());
         if let Some(pc) = note_picker(ui, ctx.settings.naming, self.marks, enabled) {
             self.marks.wrong = None;
             self.name_q.as_mut().unwrap().root_answer = Some(pc);
         }
         let types = self.pool_types();
         let labels: Vec<String> = types.iter().map(|t| format!("{} ({})", if t.suffix.is_empty() { "maj" } else { t.suffix }, t.name)).collect();
-        ui.label("Type:");
+        ui.label(RichText::new("Type:").size(17.0).strong());
         let q = self.name_q.as_ref().unwrap();
         let sel_type = q.type_answer;
         if let Some(i) = choice_buttons(ui, &labels, if self.solved { sel_type } else { None }, self.wrong_type, enabled) {
@@ -920,19 +964,47 @@ impl Chords {
                         ctx.play_chord(&v.midi_notes(t));
                     }
                     self.advance_at = Some(ctx.time + 1.8);
-                } else {
-                    self.wrong_once = true;
+                } else if self.wrong_once {
+                    // second miss: show the answer
+                    ctx.progress.record(&key, false, None);
+                    self.solved = true;
                     if r != chord.root_pc() {
                         self.marks.wrong = Some(r);
                     }
+                    self.marks.correct = Some(chord.root_pc());
+                    let right = types.iter().position(|t| t.id == chord.ty.id);
                     if types[ti].id != chord.ty.id {
+                        self.wrong_type = Some(ti);
+                    }
+                    self.name_q.as_mut().unwrap().type_answer = right;
+                    self.feedback = Some(Feedback {
+                        text: format!("✖ It is {} – listen to it once more", chord.symbol(ctx.settings.naming)),
+                        ok: false,
+                    });
+                    if let Some(v) = &self.name_q.as_ref().unwrap().voicing {
+                        ctx.play_chord(&v.midi_notes(t));
+                    }
+                    self.advance_at = Some(ctx.time + 3.5);
+                } else {
+                    self.wrong_once = true;
+                    let root_ok = r == chord.root_pc();
+                    let type_ok = types[ti].id == chord.ty.id;
+                    if !root_ok {
+                        self.marks.wrong = Some(r);
+                    }
+                    if !type_ok {
                         self.wrong_type = Some(ti);
                     }
                     let qm = self.name_q.as_mut().unwrap();
                     qm.root_answer = None;
                     qm.type_answer = None;
+                    let what = match (root_ok, type_ok) {
+                        (true, false) => "root is right, the type is wrong",
+                        (false, true) => "type is right, the root is wrong",
+                        _ => "not quite",
+                    };
                     self.feedback = Some(Feedback {
-                        text: "✖ not quite – try again".into(),
+                        text: format!("✖ {what} – try again"),
                         ok: false,
                     });
                 }

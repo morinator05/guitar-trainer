@@ -284,7 +284,8 @@ impl Chord {
 
 /// Roots offered in pickers, spelled the common way.
 pub fn common_roots() -> Vec<Note> {
-    ["C", "C#", "Db", "D", "Eb", "E", "F", "F#", "Gb", "G", "Ab", "A", "Bb", "B"]
+    // both spellings of every black key: G#m and Abm are different keys to a reader
+    ["C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Gb", "G", "G#", "Ab", "A", "A#", "Bb", "B"]
         .iter()
         .map(|s| Note::parse(s).unwrap())
         .collect()

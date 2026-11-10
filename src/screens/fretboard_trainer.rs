@@ -2,11 +2,12 @@
 //! in several places (octave shapes).
 
 use super::common::*;
+use crate::theme;
 use crate::theory::fretboard::{Pos, midi_at, octave_pairs, pc_at, positions_of_midi, positions_of_pc};
 use crate::theory::note::{Letter, Note, Pc, Pitch, is_natural};
 use crate::theory::tuning::{Tuning, TuningId};
 use crate::widgets::fretboard::Dot;
-use crate::widgets::notation::{Column, NotationView};
+use crate::widgets::notation::{Column, NotationView, STAFF_DRILL};
 use crate::widgets::{Marks, heading, hint, note_picker, tab_bar};
 use egui::{Color32, RichText, Ui};
 
@@ -71,6 +72,8 @@ pub struct FretboardTrainer {
     // shared question state
     started: f64,
     wrong_once: bool,
+    /// wrong answers on the current question; after 2 the answer is shown
+    misses: u8,
     feedback: Option<Feedback>,
     advance_at: Option<f64>,
     revealed: bool,
@@ -98,12 +101,13 @@ impl Default for FretboardTrainer {
             level: 0,
             answer: AnswerMode::OnScreen,
             explore_pc: Some(0),
-            show_all: true,
+            show_all: false,
             naturals_only: false,
             octave_lines: true,
             heatmap: false,
             started: 0.0,
             wrong_once: false,
+            misses: 0,
             feedback: None,
             advance_at: None,
             revealed: false,
@@ -143,6 +147,7 @@ impl FretboardTrainer {
         self.stamp = Some(ctx.stamp());
         self.started = ctx.time;
         self.wrong_once = false;
+        self.misses = 0;
         self.feedback = None;
         self.advance_at = None;
         self.revealed = false;
@@ -229,14 +234,11 @@ impl FretboardTrainer {
                 let pc = pc_at(t, p);
                 let is_q = self.explore_pc == Some(pc);
                 if is_q {
-                    dots.push(Dot::new(p, ctx.pc_name(pc), RED));
+                    dots.push(Dot::new(p, ctx.pc_name(pc), RED).root().emphasis());
                 } else if self.show_all && (!self.naturals_only || is_natural(pc)) {
-                    let c = if is_natural(pc) {
-                        Color32::from_rgb(200, 200, 205)
-                    } else {
-                        Color32::from_rgb(110, 110, 120)
-                    };
-                    dots.push(Dot::new(p, ctx.pc_name(pc), c));
+                    // context stays recessive: naturals light discs, sharps/flats outlined
+                    let d = Dot::new(p, ctx.pc_name(pc), Color32::from_rgb(200, 200, 205));
+                    dots.push(if is_natural(pc) { d } else { d.hollow() });
                 }
             }
         }
@@ -244,7 +246,7 @@ impl FretboardTrainer {
         if let (Some(pc), true) = (self.explore_pc, self.octave_lines) {
             let pos = positions_of_pc(t, pc, 0, max);
             for (a, b) in octave_pairs(t, &pos) {
-                lines.push((a, b, Color32::from_rgba_unmultiplied(220, 50, 47, 150)));
+                lines.push((a, b, Color32::from_rgba_unmultiplied(242, 236, 232, 210)));
             }
         }
         let progress = &*ctx.progress;
@@ -252,12 +254,7 @@ impl FretboardTrainer {
         let tint = |p: Pos| -> Option<Color32> {
             let it = progress.get(&name_key(tuning_id, p))?;
             let a = it.accuracy();
-            Some(Color32::from_rgba_unmultiplied(
-                (255.0 * (1.0 - a)) as u8,
-                (200.0 * a) as u8,
-                60,
-                110,
-            ))
+            Some(heat(a))
         };
         let mut board = ctx.board(&dots);
         board.lines = &lines;
@@ -277,24 +274,9 @@ impl FretboardTrainer {
             ui.label(RichText::new(format!("{} appears {} times between fret 0 and 12.", ctx.pc_name(pc), n)).size(16.0));
         }
         ui.add_space(4.0);
-        heading(ui, "How to find the copies of a note (octave shapes)");
-        let drop = matches!(ctx.settings.tuning, TuningId::DropD | TuningId::DropC);
-        let text = [
-            "• Every note repeats 12 frets higher on the same string.",
-            "• Root on string 6 or 5 → the octave is 2 strings higher and 2 frets higher.",
-            "• Root on string 4 or 3 → 2 strings higher and 3 frets higher (crossing the B string costs one fret: G→B is a major 3rd, all other pairs are 4ths).",
-            "• Same note on the next lower string: 5 frets higher (4 frets when going from B down to G).",
-            "• Strings 6 and 1 have the same note names: learn string 6 and you know string 1.",
-        ];
-        for l in text {
-            ui.label(RichText::new(l).size(15.0));
-        }
-        if drop {
-            ui.label(
-                RichText::new("• Drop tuning: string 6 is a whole step lower than string 1 – on string 6 every note sits 2 frets higher than on string 1. The other strings are unchanged.")
-                    .size(15.0)
-                    .color(Color32::from_rgb(240, 170, 60)),
-            );
+        heading(ui, &format!("How to find the copies of a note in {}", ctx.tuning_name()));
+        for l in octave_rules(t, &ctx.string_names()) {
+            ui.label(RichText::new(format!("• {l}")).size(16.0));
         }
         hint(ui, "Tip: click any position to hear it and select its note.");
     }
@@ -340,7 +322,15 @@ impl FretboardTrainer {
         let t = ctx.tuning();
         let q = self.q_pos.unwrap();
         let pc = pc_at(t, q);
-        prompt(ui, &format!("Which note is this?  (string {}, fret {})", Tuning::string_number(q.string as usize), q.fret));
+        prompt(
+            ui,
+            &format!(
+                "Which note is this?  (string {} – {}, fret {})",
+                Tuning::string_number(q.string as usize),
+                ctx.string_names()[q.string as usize],
+                q.fret
+            ),
+        );
         hint(ui, "Try to answer without counting frets from the nut: use the dots, octave shapes and the notes you already know.");
         let dots = if self.advance_at.is_some() {
             vec![Dot::new(q, ctx.pc_name(pc), GREEN).emphasis()]
@@ -348,7 +338,10 @@ impl FretboardTrainer {
             vec![Dot::question(q)]
         };
         let mut board = ctx.board(&dots);
+        // only the level's frets: fewer, bigger frets to read
+        board.max_fret = self.max_fret(ctx);
         board.zone = Some((0, self.max_fret(ctx)));
+        board.flash = flash(&self.feedback);
         board.show(ui);
         ui.add_space(6.0);
         let enabled = self.advance_at.is_none();
@@ -362,14 +355,26 @@ impl FretboardTrainer {
                     text: format!("✔ {}  ({:.1} s)", ctx.pc_name(pc), ms / 1000.0),
                     ok: true,
                 });
-                self.advance_at = Some(ctx.time + if self.wrong_once { 1.6 } else { 0.7 });
+                self.advance_at = Some(ctx.time + if self.wrong_once { 2.0 } else { 1.2 });
             } else {
                 self.wrong_once = true;
+                self.misses += 1;
                 self.marks.wrong = Some(a);
-                self.feedback = Some(Feedback {
-                    text: format!("✖ not {} – try again", ctx.pc_name(a)),
-                    ok: false,
-                });
+                if self.misses >= 2 {
+                    // don't make the user click through all 12: show the answer
+                    ctx.progress.record(&name_key(ctx.settings.tuning, q), false, None);
+                    self.marks.correct = Some(pc);
+                    self.feedback = Some(Feedback {
+                        text: format!("✖ It is {} – remember this one", ctx.pc_name(pc)),
+                        ok: false,
+                    });
+                    self.advance_at = Some(ctx.time + 3.0);
+                } else {
+                    self.feedback = Some(Feedback {
+                        text: format!("✖ not {} – try again", ctx.pc_name(a)),
+                        ok: false,
+                    });
+                }
             }
         }
         show_feedback(ui, &self.feedback);
@@ -470,8 +475,10 @@ impl FretboardTrainer {
         let done = self.advance_at.is_some() || self.revealed;
         let dots = self.board_dots(ctx, done);
         let mut board = ctx.board(&dots);
+        board.max_fret = self.max_fret(ctx);
         board.zone = Some(self.zone);
         board.clickable = self.answer == AnswerMode::OnScreen && !done;
+        board.flash = flash(&self.feedback);
         let clicked = board.show(ui);
 
         if self.answer == AnswerMode::OnScreen {
@@ -516,7 +523,7 @@ impl FretboardTrainer {
                     },
                     ok: !self.wrong_once,
                 });
-                self.advance_at = Some(ctx.time + 1.2);
+                self.advance_at = Some(ctx.time + 1.5);
             } else {
                 self.feedback = Some(Feedback {
                     text: format!("✔ {} of {}", self.found.len(), self.targets.len()),
@@ -528,7 +535,12 @@ impl FretboardTrainer {
             self.wrong_clicks.push((p, ctx.time));
             let n = Note::from_pc(pc_at(t, p));
             self.feedback = Some(Feedback {
-                text: format!("✖ that is {}", ctx.name(n)),
+                text: format!(
+                    "✖ that is {} (string {}, fret {})",
+                    ctx.name(n),
+                    Tuning::string_number(p.string as usize),
+                    p.fret
+                ),
                 ok: false,
             });
         }
@@ -540,14 +552,15 @@ impl FretboardTrainer {
         for p in &self.targets {
             let label = ctx.pc_name(pc_at(t, *p));
             if self.found.contains(p) {
-                dots.push(Dot::new(*p, label, GREEN));
+                dots.push(Dot::new(*p, label, GREEN).emphasis());
             } else if done {
-                dots.push(Dot::new(*p, label, if self.revealed { MARKER } else { RED }));
+                // missed targets: outlined (found ones are filled)
+                dots.push(if self.revealed { Dot::new(*p, label, MARKER) } else { Dot::new(*p, label, theme::ERROR).hollow() });
             }
         }
-        self.wrong_clicks.retain(|(_, at)| ctx.time - at < 1.0);
+        self.wrong_clicks.retain(|(_, at)| ctx.time - at < 1.6);
         for (p, _) in &self.wrong_clicks {
-            dots.push(Dot::new(*p, ctx.pc_name(pc_at(t, *p)), RED).hollow());
+            dots.push(Dot::new(*p, "✖", theme::ERROR).hollow());
         }
         dots
     }
@@ -612,14 +625,16 @@ impl FretboardTrainer {
             label: if done { p.name(ctx.settings.naming) } else { String::new() },
         }];
         let mut nv = NotationView::new(&col);
-        nv.staff_space = 11.0;
+        nv.staff_space = STAFF_DRILL;
         nv.tab = done;
         nv.show(ui);
 
         let dots = self.board_dots(ctx, done);
         let mut board = ctx.board(&dots);
+        board.max_fret = self.max_fret(ctx);
         board.zone = Some(self.zone);
         board.clickable = self.answer == AnswerMode::OnScreen && !done;
+        board.flash = flash(&self.feedback);
         let clicked = board.show(ui);
         let key = format!("fb:staff:{:?}:{}", ctx.settings.tuning, p.midi());
         if self.answer == AnswerMode::OnScreen {
@@ -657,7 +672,7 @@ pub fn stats_line(ui: &mut Ui, ctx: &Ctx, key: &str) {
         hint(
             ui,
             &format!(
-                "This question: {} of {} correct, box {}/5, avg {:.1} s",
+                "This question: {} of {} correct, memory level {}/5, avg {:.1} s",
                 it.correct,
                 it.attempts,
                 it.level + 1,
@@ -667,4 +682,97 @@ pub fn stats_line(ui: &mut Ui, ctx: &Ctx, key: &str) {
     }
     let d = ctx.progress.today();
     hint(ui, &format!("Today: {} answers, {} correct", d.attempts, d.correct));
+}
+
+/// Octave-shape rules worked out from the actual tuning (no E-standard assumptions).
+pub fn octave_rules(t: &Tuning, names: &[String; 6]) -> Vec<String> {
+    let open: Vec<i32> = (0..6).map(|s| t.open_midi(s)).collect();
+    let num = |s: usize| Tuning::string_number(s);
+    let frets = |n: i32| match n {
+        0 => "the same fret".to_string(),
+        1 => "1 fret higher".to_string(),
+        n => format!("{n} frets higher"),
+    };
+    let mut out = vec!["Every note repeats 12 frets higher on the same string.".to_string()];
+    // octave two strings up, grouped by fret offset
+    let mut groups: Vec<(i32, Vec<usize>)> = Vec::new();
+    for s in 0..4 {
+        let off = 12 - (open[s + 2] - open[s]);
+        match groups.last_mut() {
+            Some((o, v)) if *o == off => v.push(s),
+            _ => groups.push((off, vec![s])),
+        }
+    }
+    for (off, ss) in groups {
+        let list: Vec<String> = ss.iter().map(|&s| format!("{} ({})", num(s), names[s])).collect();
+        out.push(format!(
+            "Root on string {} → the octave is 2 strings higher and {}.",
+            list.join(" or "),
+            frets(off)
+        ));
+    }
+    // same note one string thinner
+    let mut odd = Vec::new();
+    for s in 0..5 {
+        let d = open[s + 1] - open[s];
+        if d != 5 {
+            odd.push(format!("{} → {} ({}→{}): {d} frets", num(s), num(s + 1), names[s], names[s + 1]));
+        }
+    }
+    let mut same = "Same note one string thinner (e.g. string 6 → 5): 5 frets lower.".to_string();
+    if !odd.is_empty() {
+        same += &format!(" Exceptions: {}.", odd.join(", "));
+    }
+    out.push(same);
+    let d61 = open[5] - open[0];
+    if d61 % 12 == 0 {
+        out.push(format!(
+            "Strings 6 and 1 are both {}: learn string 6 and you know string 1.",
+            names[0]
+        ));
+    } else {
+        let diff = d61.rem_euclid(12);
+        let (dir, n) = if diff <= 6 { ("higher", diff) } else { ("lower", 12 - diff) };
+        out.push(format!(
+            "String 6 ({}) and string 1 ({}) differ: on string 6 every note sits {n} frets {dir} than on string 1.",
+            names[0], names[5]
+        ));
+    }
+    out
+}
+
+/// Heatmap tint: one hue from dark indigo (weak) to bright yellow (known), so it
+/// reads by lightness alone (works with colour blindness).
+pub fn heat(accuracy: f32) -> Color32 {
+    let a = accuracy.clamp(0.0, 1.0);
+    let lerp = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * a) as u8;
+    Color32::from_rgba_unmultiplied(lerp(0x6A, 0xF2), lerp(0x5A, 0xD0), lerp(0xCD, 0x6B), 210)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theory::note::Naming;
+    use crate::theory::tuning::*;
+
+    fn names(t: &Tuning) -> [String; 6] {
+        std::array::from_fn(|s| t.strings[s].note.name(Naming::English))
+    }
+
+    #[test]
+    fn rules_e_standard() {
+        let r = octave_rules(&E_STANDARD, &names(&E_STANDARD));
+        assert!(r[1].contains("6 (E) or 5 (A)") && r[1].contains("2 frets higher"), "{r:?}");
+        assert!(r[2].contains("4 (D) or 3 (G)") && r[2].contains("3 frets higher"), "{r:?}");
+        assert!(r[3].contains("G→B): 4 frets"), "{r:?}");
+        assert!(r[4].contains("both E"), "{r:?}");
+    }
+
+    #[test]
+    fn rules_drop_c() {
+        let r = octave_rules(&DROP_C, &names(&DROP_C));
+        assert!(r[1].contains("6 (C)") && r[1].contains("the same fret"), "{r:?}");
+        assert!(r.iter().any(|l| l.contains("C→G): 7 frets")), "{r:?}");
+        assert!(r.last().unwrap().contains("2 frets higher"), "{r:?}");
+    }
 }

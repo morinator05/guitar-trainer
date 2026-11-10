@@ -58,12 +58,10 @@ impl Interval {
         Note::with_letter(letter, pc)
     }
 
-    /// Label used on fretboard dots: R, b3, 3, 5, b7 ...
+    /// Label shown to the user (dots, buttons, formulas): 1, ♭3, 3, 5, ♭7 ...
+    /// Real ♭/♯ signs, so "b3" can't be confused with the German note B.
     pub fn label(self) -> String {
-        if self.number == 1 && self.alter == 0 {
-            return "R".to_string();
-        }
-        self.formula_name()
+        self.formula_name().replace('b', "♭").replace('#', "♯")
     }
 
     /// Label in formula style: 1, b3, 5 ...
@@ -107,18 +105,20 @@ impl Interval {
 /// minor third looks the same everywhere in the app.
 pub fn interval_color(semis_from_root: Pc) -> [u8; 3] {
     match semis_from_root % 12 {
+        // Pairs that look alike with red-green colour blindness (b2/b3, 3/b3,
+        // 4/b7) differ in lightness too. The root is also drawn as a square.
         0 => [224, 69, 63],    // root: signal red (never used as UI accent)
-        1 => [108, 113, 196],  // b2/b9: violet
+        1 => [92, 84, 196],    // b2/b9: indigo (darker than b3)
         2 => [42, 161, 152],   // 2/9: teal
-        3 => [38, 139, 210],   // b3: blue
-        4 => [70, 170, 255],   // 3: light blue
-        5 => [133, 153, 0],    // 4/11: olive
+        3 => [45, 116, 196],   // b3: blue (darker than 3)
+        4 => [79, 216, 232],   // 3: light cyan
+        5 => [104, 120, 20],   // 4/11: dark olive
         6 => [211, 54, 130],   // b5/#4: magenta (blue note)
-        7 => [240, 160, 30],   // 5: orange
+        7 => [214, 120, 20],   // 5: deep orange (darker than b7)
         8 => [210, 168, 110],  // b6/#5: sand (visible on rosewood)
         9 => [100, 180, 100],  // 6/13: green
-        10 => [181, 137, 0],   // b7: yellow
-        _ => [200, 200, 80],   // 7: light yellow
+        10 => [245, 222, 120], // b7: light yellow
+        _ => [236, 236, 150],  // 7: pale yellow
     }
 }
 
@@ -157,7 +157,8 @@ mod tests {
 
     #[test]
     fn labels() {
-        assert_eq!(Interval::parse("1").unwrap().label(), "R");
-        assert_eq!(Interval::parse("b7").unwrap().label(), "b7");
+        assert_eq!(Interval::parse("1").unwrap().label(), "1");
+        assert_eq!(Interval::parse("b7").unwrap().label(), "♭7");
+        assert_eq!(Interval::parse("#9").unwrap().formula_name(), "#9");
     }
 }

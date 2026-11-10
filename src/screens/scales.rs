@@ -5,6 +5,7 @@ use super::common::*;
 use super::fretboard_trainer::stats_line;
 use crate::theory::chord::common_roots;
 use crate::theory::fretboard::{Pos, midi_at, pc_at};
+use crate::theme;
 use crate::theory::interval::interval_color;
 use crate::theory::note::{Note, Pc, Pitch};
 use crate::theory::scale::{SCALE_TYPES, Scale, ScaleCategory, ScaleType};
@@ -173,6 +174,37 @@ impl Scales {
 
     fn scale_picker(&mut self, ui: &mut Ui, ctx: &Ctx) -> bool {
         let mut changed = false;
+        if self.tab != Tab::Library {
+            // drills: one compact row, so the neck and the answer buttons keep the space
+            ui.horizontal(|ui| {
+                ui.label("Key:");
+                egui::ComboBox::from_id_salt("sc_key")
+                    .selected_text(RichText::new(ctx.name(self.root)).size(16.0))
+                    .width(80.0)
+                    .show_ui(ui, |ui| {
+                        for r in common_roots() {
+                            changed |= ui.selectable_value(&mut self.root, r, ctx.name(r)).changed();
+                        }
+                    });
+                ui.label("Scale:");
+                egui::ComboBox::from_id_salt("sc_type")
+                    .selected_text(RichText::new(self.ty.name).size(16.0))
+                    .width(220.0)
+                    .show_ui(ui, |ui| {
+                        for t in SCALE_TYPES.iter() {
+                            if ui.selectable_label(std::ptr::eq(self.ty, t), t.name).clicked() {
+                                self.ty = t;
+                                self.view = View::Pattern(0);
+                                changed = true;
+                            }
+                        }
+                    });
+            });
+            if changed {
+                self.play_list.clear();
+            }
+            return changed;
+        }
         ui.horizontal_wrapped(|ui| {
             ui.label("Key:");
             for r in common_roots() {
@@ -208,7 +240,7 @@ impl Scales {
             for (i, n) in s.ty.intervals().iter().zip(s.notes()) {
                 let c = rgb(interval_color(i.pc_offset()));
                 ui.label(
-                    RichText::new(format!(" {} = {} ", i.formula_name(), ctx.name(n)))
+                    RichText::new(format!(" {} = {} ", i.label(), ctx.name(n)))
                         .size(17.0)
                         .background_color(c)
                         .color(crate::widgets::fretboard::contrast_text(c)),
@@ -342,7 +374,7 @@ impl Scales {
                 let cols = self.columns(ctx, &s, &list);
                 let mut nv = NotationView::new(&cols);
                 nv.whole_notes = false;
-                nv.staff_space = 8.0;
+                nv.staff_space = 10.0;
                 nv.highlight = self.playing_index(ctx);
                 ScrollArea::horizontal().id_salt("scale_notation").show(ui, |ui| nv.show(ui));
                 hint(ui, "Tab and notation of this position, up and down. Labels under the tab are the scale degrees.");
@@ -452,13 +484,14 @@ impl Scales {
                 dots.push(self.dot(ctx, &s, *p));
             }
         }
-        self.wrong_clicks.retain(|(_, at)| ctx.time - at < 1.0);
+        self.wrong_clicks.retain(|(_, at)| ctx.time - at < 1.6);
         for (p, _) in &self.wrong_clicks {
-            dots.push(Dot::new(*p, "✖", RED).hollow());
+            dots.push(Dot::new(*p, "✖", theme::ERROR).hollow());
         }
         let mut board = ctx.board(&dots);
         board.zone = Some(self.q_pos.fret_range());
         board.clickable = !done;
+        board.flash = flash(&self.feedback);
         if let Some(p) = board.show(ui) {
             if targets.contains(&p) {
                 if !self.found.contains(&p) {
@@ -556,8 +589,8 @@ impl Scales {
             return;
         };
         let key = format!("sc:deg:{}:{}", s.ty.id, interval.formula_name());
-        prompt(ui, &format!("{} {}: which scale degree is the ringed note?", ctx.name(s.root), s.ty.name));
-        hint(ui, "Find the nearest root (red) and think in intervals: that's how you target chord tones while improvising.");
+        prompt(ui, &format!("{} {}: which scale degree is the \"?\" note?", ctx.name(s.root), s.ty.name));
+        hint(ui, "Find the nearest root (square, 1) and count the interval from it: that's how you target chord tones while improvising.");
         let mut dots = Vec::new();
         for p in &self.q_pos.notes {
             let is_root = pc_at(t, *p) == s.root.pc();
@@ -566,16 +599,17 @@ impl Scales {
                 d = d.emphasis();
                 dots.push(d);
             } else if self.show_roots && is_root {
-                dots.push(Dot::new(*p, "R", RED));
+                dots.push(Dot::new(*p, "1", RED).root());
             } else {
                 dots.push(Dot::new(*p, "", Color32::from_gray(150)).hollow());
             }
         }
         let mut board = ctx.board(&dots);
         board.zone = Some(self.q_pos.fret_range());
+        board.flash = flash(&self.feedback);
         board.show(ui);
         let ints = s.ty.intervals();
-        let labels: Vec<String> = ints.iter().map(|i| i.formula_name()).collect();
+        let labels: Vec<String> = ints.iter().map(|i| i.label()).collect();
         let enabled = self.advance_at.is_none();
         if let Some(i) = choice_buttons(ui, &labels, self.right_choice, self.wrong_choice, enabled) {
             ctx.play_note(midi_at(t, q));
@@ -584,14 +618,27 @@ impl Scales {
                 ctx.progress.record(&key, !self.wrong_once, Some(ms));
                 self.right_choice = Some(i);
                 self.feedback = Some(Feedback {
-                    text: format!("✔ {} = {} ({})", interval.formula_name(), ctx.name(s.spell(pc)), interval.long_name()),
+                    text: format!("✔ {} = {} ({})", interval.label(), ctx.name(s.spell(pc)), interval.long_name()),
                     ok: true,
                 });
-                self.advance_at = Some(ctx.time + if self.wrong_once { 1.8 } else { 0.9 });
+                self.advance_at = Some(ctx.time + if self.wrong_once { 2.0 } else { 1.3 });
+            } else if self.wrong_once {
+                // second miss: show the answer instead of letting the user guess on
+                ctx.progress.record(&key, false, None);
+                self.wrong_choice = Some(i);
+                self.right_choice = ints.iter().position(|x| *x == interval);
+                self.feedback = Some(Feedback {
+                    text: format!("✖ It is {} = {} ({})", interval.label(), ctx.name(s.spell(pc)), interval.long_name()),
+                    ok: false,
+                });
+                self.advance_at = Some(ctx.time + 3.0);
             } else {
                 self.wrong_once = true;
                 self.wrong_choice = Some(i);
-                self.feedback = Some(Feedback { text: "✖ try again".into(), ok: false });
+                self.feedback = Some(Feedback {
+                    text: format!("✖ not {} – try again", ints[i].label()),
+                    ok: false,
+                });
             }
         }
         show_feedback(ui, &self.feedback);

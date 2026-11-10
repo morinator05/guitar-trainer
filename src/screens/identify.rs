@@ -8,7 +8,7 @@ use crate::theory::identify::{Analysis, analyse, bass_intervals, fitting_scales}
 use crate::theory::interval::interval_color;
 use crate::theory::note::{Note, Pc, Pitch};
 use crate::widgets::fretboard::{Dot, contrast_text, rgb};
-use crate::widgets::notation::{Column, NotationView};
+use crate::widgets::notation::{Column, NotationView, STAFF_LIB};
 use crate::widgets::{heading, hint};
 use egui::{RichText, Ui};
 
@@ -121,11 +121,11 @@ impl Identify {
                 for i in c.ty.intervals().into_iter().chain(c.tensions.iter().copied()) {
                     let n = i.apply(c.root);
                     if c.missing.contains(&i) {
-                        ui.label(RichText::new(format!(" ({} = {}, not played) ", i.formula_name(), ctx.name(n))).color(theme::TEXT_WEAK));
+                        ui.label(RichText::new(format!(" ({} = {}, not played) ", i.label(), ctx.name(n))).color(theme::TEXT_WEAK));
                     } else {
                         let col = rgb(interval_color(i.pc_offset()));
                         ui.label(
-                            RichText::new(format!(" {} = {} ", i.formula_name(), ctx.name(n)))
+                            RichText::new(format!(" {} = {} ", i.label(), ctx.name(n)))
                                 .size(16.0)
                                 .background_color(col)
                                 .color(contrast_text(col)),
@@ -177,7 +177,7 @@ impl Identify {
                     label: String::new(),
                 }];
                 let mut nv = NotationView::new(&cols);
-                nv.staff_space = 9.0;
+                nv.staff_space = STAFF_LIB;
                 ui.allocate_ui(egui::vec2(200.0, 260.0), |ui| nv.show(ui));
                 let names: Vec<String> = sorted.iter().map(|(m, _)| Pitch::from_midi_spelled(*m, spell(m.rem_euclid(12) as Pc)).name(naming)).collect();
                 ui.label(names.join("  "));

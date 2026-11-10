@@ -5,3 +5,4 @@ pub mod identify;
 pub mod progress;
 pub mod scales;
 pub mod settings;
+pub mod today;

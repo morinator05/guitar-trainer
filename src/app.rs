@@ -5,6 +5,7 @@ use crate::screens::fretboard_trainer::{self, FretboardTrainer};
 use crate::screens::progress::{self, Drill, Session};
 use crate::screens::scales::{self, Scales};
 use crate::screens::settings as settings_screen;
+use crate::screens::today;
 use crate::settings::Settings;
 use crate::srs::Progress;
 use crate::storage;
@@ -16,6 +17,7 @@ use std::sync::Arc;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
+    Today,
     Fretboard,
     Chords,
     Scales,
@@ -37,6 +39,8 @@ pub struct App {
     session: Option<Session>,
     last_save: f64,
     applied: Option<f32>,
+    /// Developer option GT_SHOT=<file.ppm>: frames rendered before the screenshot.
+    shot: Option<(String, u32)>,
 }
 
 const SETTINGS_FILE: &str = "settings.json";
@@ -55,7 +59,14 @@ impl App {
         // Hack (bundled monospace font) has arrows and symbols the UI font lacks
         if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
             prop.push("Hack".to_owned());
+            // ♭ ♮ ♯ for interval labels: the UI font has no music signs
+            // (3-glyph subset of DejaVu Sans, ~4 KB).
+            prop.push("accidentals".to_owned());
         }
+        fonts.font_data.insert(
+            "accidentals".to_owned(),
+            Arc::new(FontData::from_static(include_bytes!("../assets/DejaVuSans-accidentals.ttf"))),
+        );
         cc.egui_ctx.set_fonts(fonts);
         theme::apply(&cc.egui_ctx);
 
@@ -69,7 +80,7 @@ impl App {
             progress,
             audio,
             rng: Rng::seeded(),
-            screen: Screen::Fretboard,
+            screen: Screen::Today,
             fb: FretboardTrainer::default(),
             chords: Chords::default(),
             scales: Scales::default(),
@@ -77,6 +88,7 @@ impl App {
             session: None,
             last_save: 0.0,
             applied: None,
+            shot: std::env::var("GT_SHOT").ok().map(|p| (p, 0)),
         };
         // Developer option: start on a given screen, e.g. GT_START=chords:read
         if let Ok(start) = std::env::var("GT_START") {
@@ -109,9 +121,31 @@ impl App {
                 self.screen = Screen::Scales;
                 self.scales.set_tab(scales::Tab::PlayPosition);
             }
+            "today" => self.screen = Screen::Today,
             "progress" => self.screen = Screen::Progress,
             "settings" => self.screen = Screen::Settings,
             _ => eprintln!("GT_START: unknown screen {s:?}"),
+        }
+    }
+
+    /// GT_SHOT: let layout settle for a few frames, write one PPM screenshot, exit.
+    fn dev_screenshot(&mut self, ctx: &egui::Context) {
+        let Some((path, frames)) = &mut self.shot else { return };
+        *frames += 1;
+        ctx.request_repaint();
+        if *frames == 20 {
+            let path = path.clone();
+            ctx.request_screenshot(move |img| {
+                let [w, h] = img.size;
+                let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+                for p in &img.pixels {
+                    out.extend_from_slice(&[p.r(), p.g(), p.b()]);
+                }
+                if let Err(e) = std::fs::write(&path, out) {
+                    eprintln!("GT_SHOT: {e}");
+                }
+                std::process::exit(0);
+            });
         }
     }
 
@@ -211,6 +245,9 @@ impl App {
                     }
                 }
             });
+            if !s.finished(&self.progress) {
+                ui.label(RichText::new(s.current().how()).size(16.0).color(theme::TEXT));
+            }
         });
         ui.add_space(4.0);
         if stop {
@@ -234,23 +271,35 @@ impl eframe::App for App {
             ui.label(RichText::new("🎸 Guitar Trainer").size(20.0).strong().color(theme::ACCENT_HOVER));
             ui.add_space(14.0);
             for (s, label) in [
+                (Screen::Today, "▶ Today"),
                 (Screen::Fretboard, "Fretboard"),
                 (Screen::Chords, "Chords"),
                 (Screen::Scales, "Scales"),
                 (Screen::Progress, "Progress"),
                 (Screen::Settings, "Settings"),
             ] {
-                let b = egui::Button::selectable(self.screen == s, RichText::new(label).size(19.0))
+                let sel = self.screen == s;
+                let text = RichText::new(label).size(19.0);
+                let b = egui::Button::selectable(sel, if sel { text.strong() } else { text })
                     .min_size(egui::vec2(150.0, 38.0));
-                if ui.add(b).clicked() {
+                let r = ui.add(b);
+                if sel {
+                    // non-colour cue for the current screen
+                    let x = r.rect.left() - 6.0;
+                    ui.painter().line_segment(
+                        [egui::pos2(x, r.rect.top() + 4.0), egui::pos2(x, r.rect.bottom() - 4.0)],
+                        egui::Stroke::new(4.0, theme::TEXT_STRONG),
+                    );
+                }
+                if r.clicked() {
                     self.screen = s;
                 }
             }
             ui.add_space(16.0);
             ui.add_space(8.0);
             ui.label(RichText::new("Tuning").weak());
-            ui.label(RichText::new(self.settings.tuning().name).size(13.0));
-            ui.label(RichText::new(self.settings.fretboard_style.label()).size(13.0).weak());
+            ui.label(RichText::new(self.settings.tuning().label(self.settings.naming)).size(14.0));
+            ui.label(RichText::new(self.settings.fretboard_style.label()).size(14.0).weak());
             ui.add_space(6.0);
             let d = self.progress.today();
             ui.label(RichText::new(format!("Today: {} answers", d.attempts)).weak());
@@ -259,6 +308,7 @@ impl eframe::App for App {
             }
         });
 
+        let mut start_session = false;
         egui::CentralPanel::default().show(ui, |ui| {
             self.session_bar(ui);
             let mut ctx = Ctx {
@@ -273,17 +323,24 @@ impl eframe::App for App {
                 Screen::Fretboard => self.fb.ui(ui, &mut ctx),
                 Screen::Chords => self.chords.ui(ui, &mut ctx),
                 Screen::Scales => self.scales.ui(ui, &mut ctx),
-                Screen::Progress => {
-                    if progress::ui(ui, &mut ctx) {
-                        let s = Session::new(&self.progress);
-                        let d = s.current();
-                        self.session = Some(s);
-                        self.go_to_drill(d);
-                    }
-                }
+                Screen::Today => match today::ui(ui, &mut ctx) {
+                    Some(today::Action::StartSession) => start_session = true,
+                    Some(today::Action::Fretboard) => self.screen = Screen::Fretboard,
+                    Some(today::Action::Chords) => self.screen = Screen::Chords,
+                    Some(today::Action::Scales) => self.screen = Screen::Scales,
+                    None => {}
+                },
+                Screen::Progress => start_session = progress::ui(ui, &mut ctx),
                 Screen::Settings => settings_screen::ui(ui, &mut ctx),
             }
         });
+
+        if start_session {
+            let s = Session::new(&self.progress);
+            let d = s.current();
+            self.session = Some(s);
+            self.go_to_drill(d);
+        }
 
         match self.nav.take() {
             Some(Nav::Chord { root, ty }) => {
@@ -306,6 +363,7 @@ impl eframe::App for App {
         if self.progress.dirty {
             ectx.request_repaint_after(std::time::Duration::from_millis(2100));
         }
+        self.dev_screenshot(&ectx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

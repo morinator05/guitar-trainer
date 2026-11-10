@@ -16,7 +16,8 @@ pub fn ui(ui: &mut Ui, ctx: &mut Ctx) {
         ui.horizontal(|ui| {
             ui.label("Tuning:");
             for t in ALL_TUNINGS {
-                ui.selectable_value(&mut s.tuning, t.id, t.name);
+                let label = t.label(s.naming);
+                ui.selectable_value(&mut s.tuning, t.id, label);
             }
         });
         ui.add(egui::Slider::new(&mut s.frets, 12..=24).text("frets shown"));
@@ -41,7 +42,7 @@ pub fn ui(ui: &mut Ui, ctx: &mut Ctx) {
         ui.add_space(8.0);
         heading(ui, "Sound");
         ui.checkbox(&mut s.sound, "sound on");
-        if ui.add(egui::Slider::new(&mut s.volume, 0.0..=1.0).text("volume")).changed() {
+        if ui.add(egui::Slider::new(&mut s.volume, 0.0..=1.0).text("volume").custom_formatter(|v, _| format!("{:.0} %", v * 100.0)).custom_parser(|t| t.trim_end_matches(['%', ' ']).parse::<f64>().ok().map(|v| v / 100.0))).changed() {
             ctx.audio.set_volume(s.volume);
         }
         ui.add(egui::Slider::new(&mut s.bpm, 40.0..=220.0).text("default BPM"));
@@ -60,11 +61,14 @@ pub fn ui(ui: &mut Ui, ctx: &mut Ctx) {
         });
 
         // live preview of the chosen look (an A minor chord shape)
-        let preview: Vec<Dot> = [(1u8, 0u8, "R"), (2, 2, "5"), (3, 2, "R"), (4, 1, "b3"), (5, 0, "5")]
+        let preview: Vec<Dot> = [(1u8, 0u8, "1"), (2, 2, "5"), (3, 2, "1"), (4, 1, "♭3"), (5, 0, "5")]
             .iter()
             .map(|&(st, f, l)| {
-                let semis = match l { "R" => 0, "b3" => 3, _ => 7 };
-                Dot::new(Pos::new(st, f), l, rgb(interval_color(semis)))
+                let semis = match l { "1" => 0, "♭3" => 3, _ => 7 };
+                {
+                    let d = Dot::new(Pos::new(st, f), l, rgb(interval_color(semis)));
+                    if semis == 0 { d.root() } else { d }
+                }
             })
             .collect();
         let mut board = ctx.board(&preview);
